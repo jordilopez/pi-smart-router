@@ -149,7 +149,7 @@ export function classifierThresholds(config: SmartRouterConfig): {
   mediumMax: number;
 } {
   return {
-    ...{ cheapMax: 0.2, simpleMax: 0.3, mediumMax: 0.8 },
+    ...{ cheapMax: 0.15, simpleMax: 0.3, mediumMax: 0.8 },
     ...config.classifier?.thresholds,
   };
 }
@@ -224,7 +224,7 @@ export function resolveRoute(
   }
 
   // 2. Score thresholds: cheap -> fast -> balanced -> powerful. Configs that
-  //    omit cheapMax get the built-in default (0.2). An escalation override
+  //    omit cheapMax get the built-in default (0.15). An escalation override
   //    replaces the computed tier (never below fast / above balanced by type).
   const thresholds = classifierThresholds(config);
   const computedTier = tierForScore(score, thresholds);

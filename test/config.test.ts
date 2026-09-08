@@ -134,7 +134,7 @@ describe("validateConfig semantics", () => {
 });
 
 describe("backward compatibility", () => {
-  it("configs that omit cheapMax validate and get the 0.2 default at resolution time", async () => {
+  it("configs that omit cheapMax validate and get the 0.15 default at resolution time", async () => {
     const globalPath = path.join(dir, "legacy.json");
     await writeFile(
       globalPath,
@@ -151,7 +151,7 @@ describe("backward compatibility", () => {
     );
     const result = await loadSmartRouterConfig({ globalPath, projectPath: path.join(dir, "nope.json"), projectTrusted: false });
     expect(result.config.classifier?.thresholds?.cheapMax).toBeUndefined();
-    // The resolver supplies 0.2 as the effective default (covered in
+    // The resolver supplies 0.15 as the effective default (covered in
     // route-resolver tests); loading must not fail.
     expect(result.config.defaultRoute).toBe("balanced");
   });

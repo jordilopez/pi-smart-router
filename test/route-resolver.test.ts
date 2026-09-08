@@ -181,13 +181,13 @@ describe("resolveRoute: thresholds", () => {
   });
 
   it("uses default thresholds when cheapMax is omitted (compat)", () => {
-    // No classifier.thresholds at all: cheap <= 0.20, fast <= 0.30,
+    // No classifier.thresholds at all: cheap <= 0.15, fast <= 0.30,
     // balanced <= 0.80, powerful above.
     const cfg = config();
     delete cfg.classifier;
     expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.05 }), ctx).route).toBe("cheap-code");
-    expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.20 }), ctx).route).toBe("cheap-code");
-    expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.21 }), ctx).route).toBe("fast");
+    expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.15 }), ctx).route).toBe("cheap-code");
+    expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.16 }), ctx).route).toBe("fast");
     expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.30 }), ctx).route).toBe("fast");
     expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.31 }), ctx).route).toBe("balanced");
     expect(resolveRoute(registry(), cfg, features({ complexityScore: 0.80 }), ctx).route).toBe("balanced");
@@ -375,9 +375,9 @@ describe("resolveRoute: escalation tier override", () => {
 
   it("classifierThresholds + tierForScore match the resolver's tier computation", () => {
     const t = classifierThresholds(config());
-    expect(t).toEqual({ cheapMax: 0.2, simpleMax: 0.3, mediumMax: 0.8 });
+    expect(t).toEqual({ cheapMax: 0.15, simpleMax: 0.3, mediumMax: 0.8 });
     expect(tierForScore(0.1, t)).toBe("cheap");
-    expect(tierForScore(0.2, t)).toBe("cheap");
+    expect(tierForScore(0.15, t)).toBe("cheap");
     expect(tierForScore(0.25, t)).toBe("fast");
     expect(tierForScore(0.5, t)).toBe("balanced");
     expect(tierForScore(0.9, t)).toBe("powerful");

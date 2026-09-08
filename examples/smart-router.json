@@ -34,8 +34,8 @@
       "imageSignal": 0
     },
     "thresholds": {
-      "$comment": "score <= cheapMax -> cheap tier (mimo). At 0.2, trivial prompts (greetings, quick questions, one-liners) land on the cheap code model; cheap-code is additionally reachable via mechanical-task rules at any score.",
-      "cheapMax": 0.2,
+      "$comment": "score <= cheapMax -> cheap tier (mimo). Trivial prompts (greetings, quick questions, one-liners) land here; cheap-code is also reachable via mechanical-task rules at any score.",
+      "cheapMax": 0.15,
       "simpleMax": 0.3,
       "mediumMax": 0.8
     },
