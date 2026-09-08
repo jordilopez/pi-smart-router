@@ -15,12 +15,12 @@ pi -e ./src/index.ts
 
 All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer keeps showing `pi-smart-router/auto`; the `[pi-smart-router]` route log line identifies the actual backend used for each turn.
 
-| Tier | Route | Backend | Cost per 1M (in/out) | Intent |
-|---|---|---|---|---|
-| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | $0.14 / $0.28 | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules. **Not local** - mimo-v2.5 is a cheap hosted code model. |
-| fast | `fast` | `opencode-go/glm-5.3-flash` | $0.075 / $0.25 | Greetings, quick questions, trivial lookups. |
-| balanced | `balanced` | `opencode-go/gpt-5.6-luna` (exact lowercase ID) | $0.20 / $1.20 | The everyday default: normal coding, reviews, multi-file edits. |
-| powerful | `powerful` | `opencode-go/kimi-k3` | $3 / $15 | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
+| Tier | Route | Backend | Intent |
+|---|---|---|---|
+| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules. **Not local** - mimo-v2.5 is a cheap hosted code model. |
+| fast | `fast` | `opencode-go/glm-5.3-flash` | Greetings, quick questions, trivial lookups. |
+| balanced | `balanced` | `opencode-go/gpt-5.6-luna` (exact lowercase ID) | The everyday default: normal coding, reviews, multi-file edits. |
+| powerful | `powerful` | `opencode-go/kimi-k3` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
 
 **Kimi is dramatically more expensive** (an order of magnitude above the other tiers) and is deliberately hard to reach:
 
