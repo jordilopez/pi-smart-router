@@ -35,6 +35,12 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 4. The request is delegated to the backend provider via `modelRegistry.getProvider(...).streamSimple(...)`, with auth (`apiKey`/`headers`/`baseUrl`) resolved through `modelRegistry.getApiKeyAndHeaders(...)`. All stream events are forwarded unchanged.
 5. Tool-call continuations **reuse the turn's route decision** - the backend never changes mid-turn.
 
+### Declared context window of `smart-router/auto`
+
+`smart-router/auto` is a **virtual model** - it is never contacted and has no real context window of its own. Its registered `contextWindow` (1M, mirroring the configured 1M-context backends) exists only for Pi core's view of the router: the UI display and compaction triggering. A smaller declared value would make Pi compact conversations long before the backends were actually full.
+
+Actual per-turn fit is enforced separately and per backend: the resolver checks estimated context tokens against each backend model's own `contextWindow * 0.8` (see [Compatibility checks](#routing-decision-order)). If you add backends with smaller windows than 1M, routing stays correct, but the declared 1M makes compaction timing optimistic.
+
 ### How the local complexity score is formed
 
 The classifier is intentionally lightweight and deterministic. It extracts signals from the latest user prompt and the current context, normalizes them to 0–1, then combines them with configurable weights:

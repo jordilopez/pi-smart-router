@@ -21,7 +21,15 @@ import {
   streamSmartRouter,
 } from "./provider.js";
 
-/** The single registered router model. */
+/**
+ * The single registered router model.
+ *
+ * "auto" is a virtual model: routing decisions use each backend model's own
+ * contextWindow (see route-resolver.ts), so this value only affects pi core's
+ * view of the router (UI display and compaction triggering). It is declared as
+ * 1M to mirror the configured 1M-context backends; a smaller value would make
+ * pi compact conversations long before the backends were actually full.
+ */
 const ROUTER_MODELS = [
   {
     id: "auto",
@@ -29,7 +37,7 @@ const ROUTER_MODELS = [
     reasoning: true,
     input: ["text", "image"] as ("text" | "image")[],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
+    contextWindow: 1_000_000,
     maxTokens: 64000,
   },
 ];
