@@ -182,7 +182,7 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
   if (config.escalation) {
     // Validate the *effective* band (user values merged over defaults): a
     // config that sets only minScore=0.8 would otherwise silently combine
-    // with the default maxScore (0.45) into an impossible, never-firing band.
+    // with the default maxScore (0.35) into an impossible, never-firing band.
     const merged = { ...DEFAULT_ESCALATION_CONFIG, ...config.escalation };
     if (merged.minScore > merged.maxScore) {
       throw new RouterError(

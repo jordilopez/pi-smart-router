@@ -114,14 +114,14 @@ describe("shouldEscalate", () => {
   });
 
   it("is true inside the band", () => {
-    expect(shouldEscalate(features({ complexityScore: 0.2 }), esc)).toBe(true);
+    expect(shouldEscalate(features({ complexityScore: 0.15 }), esc)).toBe(true);
     expect(shouldEscalate(features({ complexityScore: 0.3 }), esc)).toBe(true);
-    expect(shouldEscalate(features({ complexityScore: 0.45 }), esc)).toBe(true);
+    expect(shouldEscalate(features({ complexityScore: 0.35 }), esc)).toBe(true);
   });
 
   it("is false outside the band", () => {
-    expect(shouldEscalate(features({ complexityScore: 0.19 }), esc)).toBe(false);
-    expect(shouldEscalate(features({ complexityScore: 0.46 }), esc)).toBe(false);
+    expect(shouldEscalate(features({ complexityScore: 0.11 }), esc)).toBe(false);
+    expect(shouldEscalate(features({ complexityScore: 0.36 }), esc)).toBe(false);
   });
 
   it("is false for image prompts", () => {

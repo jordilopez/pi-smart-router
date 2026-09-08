@@ -17,7 +17,7 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 | Tier | Route | Backend | Cost per 1M (in/out) | Intent |
 |---|---|---|---|---|
-| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | $0.14 / $0.28 | Mechanical, low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). **Not local** - mimo-v2.5 is a cheap hosted code model. |
+| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | $0.14 / $0.28 | Mechanical, low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Reached through explicit mechanical-task rules by default. **Not local** - mimo-v2.5 is a cheap hosted code model. |
 | fast | `fast` | `opencode-go/glm-5.3-flash` | $0.075 / $0.25 | Greetings, quick questions, trivial lookups. |
 | balanced | `balanced` | `opencode-go/gpt-5.6-luna` (exact lowercase ID) | $0.20 / $1.20 | The everyday default: normal coding, reviews, multi-file edits. |
 | powerful | `powerful` | `opencode-go/kimi-k3` | $3 / $15 | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
@@ -52,10 +52,10 @@ The classifier is intentionally lightweight and deterministic. It extracts signa
 - **Code likelihood** - code-related words and patterns such as fenced code, declarations, file paths, stack traces, and code punctuation.
 - **Reasoning likelihood** - reasoning and evaluation language such as “compare”, “why”, “trade-off”, “root cause”, “design”, and “review”.
 - **Keyword signal** - matches across reasoning, architecture, debugging, performance, and security keyword groups.
-- **Tool signal** - whether tools are available and how many are attached to the context.
+- **Tool signal** - only tools beyond a typical bare Pi coding session baseline (about eight tools) raise this signal. The standard tool set is session state, not prompt difficulty, and does not consume the cheap-tier score budget.
 - **Image signal** - whether images are present. This is normally weighted at zero because image support is enforced separately by backend capability checks.
 
-The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. For example, with the defaults, scores up to `0.15` target cheap-code, scores up to `0.30` target fast, scores up to `0.80` target balanced, and higher scores target powerful. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
+The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. By default, `cheapMax` is `0`, so cheap-code is rule-driven rather than score-driven; scores above `0` through `0.30` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Set a positive `cheapMax` to opt back into score-based cheap routing. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
 
 ## Install
 
@@ -154,7 +154,7 @@ Routes are only resolved when actually selected - backends that don't exist or a
                                       // capability checks, not the complexity score
     },
     "thresholds": {
-      "cheapMax": 0.15,               // score <= cheapMax  -> cheap tier (cheap/cheap-code/low-cost/economy)
+      "cheapMax": 0,                  // cheap tier is rule-driven by default; set >0 to enable score-based cheap routing
       "simpleMax": 0.3,               // <= simpleMax       -> fast tier (fast/simple/...)
       "mediumMax": 0.8                // <= mediumMax       -> balanced tier; above -> powerful tier
     },
@@ -193,7 +193,7 @@ User keywords in rules are matched as **escaped literal phrases** (case-insensit
 For each new turn (re-classified only on `turn_start`):
 
 1. **Explicit rules**, highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues.
-2. **Complexity thresholds** (cheap → fast → balanced → powerful): score ≤ `cheapMax` → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. If **LLM escalation** is enabled and the score falls inside the escalation band, the classifier's verdict replaces this tier (see below).
+2. **Complexity thresholds** (cheap → fast → balanced → powerful): score ≤ `cheapMax` → route named `cheap`/`cheap-code`/`low-cost`/`economy`; by default `cheapMax` is `0`, making cheap-code effectively rule-driven. Scores ≤ `simpleMax` route to `fast`/`simple`/...; scores ≤ `mediumMax` route to `balanced`/...; higher scores route to `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. If **LLM escalation** is enabled and the score falls inside the escalation band, the classifier's verdict replaces this tier (see below).
 3. **`defaultRoute`**.
 4. **`fallbacks`**, in order.
 5. **Any available route** (declaration order).
@@ -215,7 +215,7 @@ just under `simpleMax`). Escalation refines exactly those borderline turns:
 
 - **When:** `escalation.enabled` is true, no images are present, no explicit
   rule resolved the turn, and the complexity score is inside
-  `[minScore, maxScore]` (defaults 0.2–0.45).
+  `[minScore, maxScore]` (defaults 0.12–0.35).
 - **What happens:** one tiny call (`maxTokens: 4`, `temperature: 0`) to the
   classifier model — `escalation.model` if set, otherwise the **fast tier's**
   route — asking it to answer `fast` or `balanced` for the latest request,
@@ -233,8 +233,8 @@ just under `simpleMax`). Escalation refines exactly those borderline turns:
 {
   "escalation": {
     "enabled": true,
-    "minScore": 0.2,
-    "maxScore": 0.45,
+    "minScore": 0.12,
+    "maxScore": 0.35,
     "model": "opencode-go/glm-5.3-flash", // optional: defaults to the fast tier route
     "timeoutMs": 1500
   }
@@ -253,7 +253,7 @@ classifier call is in flight.
 
 ## Adaptive routing and future upgrades
 
-The current router is **prompt-based and deterministic**, not adaptive. It does not dynamically promote a request from `fast` to `balanced` because the task takes longer, produces an incorrect patch, enters a long tool loop, or appears difficult in hindsight. There is no success/failure feedback loop:
+The router has one limited, opt-in adaptive feature: **borderline-band LLM escalation**. When enabled, a fast classifier can replace a heuristic `fast`/`balanced` decision for prompts in the configured score band. It does not retry failed work or observe answer quality. The broader router still has no success/failure feedback loop:
 
 - A backend that is unavailable or incompatible is skipped **before streaming** and the normal fallback order is used.
 - Once streaming begins, the selected backend is fixed for the turn. Backend errors are surfaced as stream errors; they are not retried on another route.

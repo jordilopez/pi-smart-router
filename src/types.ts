@@ -46,9 +46,9 @@ export interface ClassifierWeights {
 export interface EscalationConfig {
   /** Master switch. Default false (opt-in). */
   enabled?: boolean;
-  /** Lower bound of the borderline complexity-score band. Default 0.2 */
+  /** Lower bound of the borderline complexity-score band. Default 0.12 */
   minScore?: number;
-  /** Upper bound of the borderline complexity-score band. Default 0.45 */
+  /** Upper bound of the borderline complexity-score band. Default 0.35 */
   maxScore?: number;
   /**
    * Classifier backend as "provider/modelId". Optional: defaults to the model
@@ -65,7 +65,7 @@ export type EscalationVerdict = "fast" | "balanced";
 
 /** Score thresholds for automatic (threshold-based) route selection. */
 export interface ClassifierThresholds {
-  /** Maximum complexity score routed to the "cheap" tier (0-1). Default 0.15 */
+  /** Maximum complexity score routed to the "cheap" tier (0-1). Default 0; cheap is rule-driven. */
   cheapMax?: number;
   /** Maximum complexity score routed to the "fast" tier (0-1). Default 0.30 */
   simpleMax?: number;
@@ -151,7 +151,9 @@ export const DEFAULT_CLASSIFIER_CONFIG: Required<ClassifierConfig> = {
     imageSignal: 0,
   },
   thresholds: {
-    cheapMax: 0.15,
+    // Cheap-code is selected by explicit mechanical-task rules by default;
+    // set a positive cheapMax to opt back into score-based cheap routing.
+    cheapMax: 0,
     simpleMax: 0.3,
     mediumMax: 0.8,
   },
@@ -166,8 +168,10 @@ export const DEFAULT_CLASSIFIER_CONFIG: Required<ClassifierConfig> = {
  */
 export const DEFAULT_ESCALATION_CONFIG: Required<EscalationConfig> = {
   enabled: false,
-  minScore: 0.2,
-  maxScore: 0.45,
+  // The band is shifted down because the tool baseline is no longer counted
+  // as prompt complexity.
+  minScore: 0.12,
+  maxScore: 0.35,
   model: "",
   timeoutMs: 1500,
 };

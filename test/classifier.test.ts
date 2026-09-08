@@ -129,17 +129,28 @@ describe("classifyPrompt (table-driven)", () => {
       },
     },
     {
-      name: "tools set hasTools and toolSignal",
+      name: "tools beyond the baseline set hasTools and toolSignal",
       context: () => makeContext({
         messages: [user("list the files")],
-        tools: [
-          { name: "bash", description: "run bash", parameters: {} as never },
-          { name: "read", description: "read file", parameters: {} as never },
-        ],
+        tools: Array.from({ length: 12 }, (_, i) => ({ name: `tool${i}`, description: "x", parameters: {} as never })),
       }),
       assert: (f) => {
         expect(f.hasTools).toBe(true);
+        // Only tools beyond the typical bare-session baseline (8) raise the
+        // signal - a standard tool set must not consume the cheap-tier budget.
         expect(f.toolSignal).toBeGreaterThan(0);
+        expect(f.toolSignal).toBeLessThan(0.5);
+      },
+    },
+    {
+      name: "a typical bare-session tool set does not raise toolSignal",
+      context: () => makeContext({
+        messages: [user("rename foo to bar")],
+        tools: Array.from({ length: 8 }, (_, i) => ({ name: `tool${i}`, description: "x", parameters: {} as never })),
+      }),
+      assert: (f) => {
+        expect(f.hasTools).toBe(true);
+        expect(f.toolSignal).toBe(0);
       },
     },
     {
@@ -181,7 +192,7 @@ describe("classifyPrompt (table-driven)", () => {
     expect(w.keywordSignal).toBe(0.15);
     expect(w.toolSignal).toBe(0.1);
     expect(w.imageSignal).toBe(0);
-    expect(BASE_CONFIG.thresholds).toEqual({ cheapMax: 0.15, simpleMax: 0.3, mediumMax: 0.8 });
+    expect(BASE_CONFIG.thresholds).toEqual({ cheapMax: 0, simpleMax: 0.3, mediumMax: 0.8 });
   });
 
   it("scores ordered: reasoning > code > greeting, with sane tier placement", () => {

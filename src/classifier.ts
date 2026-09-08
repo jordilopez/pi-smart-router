@@ -21,6 +21,9 @@ const CHARS_PER_TOKEN = 4;
 /** Estimated token cost of one image block. */
 const IMAGE_TOKEN_ESTIMATE = 512;
 
+/** Number of tools a bare Pi coding session typically attaches by default. */
+const TOOL_SIGNAL_BASELINE = 8;
+
 const CODE_KEYWORDS = [
   "function", "class", "interface", "type", "const", "let", "var",
   "import", "export", "return", "async", "await", "promise",
@@ -236,7 +239,13 @@ export function normalizeFeatures(raw: RawPromptFeatures, config: ClassifierConf
   const codeLikelihood = Math.tanh(raw.codeIndicators / 10);
   const reasoningLikelihood = Math.tanh(raw.reasoningIndicators / 5);
   const keywordSignal = Math.tanh(raw.keywordMatches / 5);
-  const toolSignal = raw.hasTools ? Math.min(1, raw.toolCount / 10) : 0;
+  // Tool availability is usually a session-level constant in Pi, not a prompt
+  // difficulty signal. Only tools beyond a typical bare-session baseline add
+  // complexity, so simply having the standard tool set does not consume the
+  // cheap-tier score budget.
+  const toolSignal = raw.hasTools
+    ? Math.min(1, Math.max(0, raw.toolCount - TOOL_SIGNAL_BASELINE) / 10)
+    : 0;
   const imageSignal = raw.hasImages ? Math.min(1, raw.imageCount / 5) : 0;
 
   const complexityScore = Math.min(

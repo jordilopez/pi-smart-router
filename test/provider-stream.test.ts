@@ -119,11 +119,12 @@ describe("route visibility (footer status)", () => {
     await drain(streamSmartRouter(routerModel, makeContext()));
 
     // One status update (the decision), no duplicates across tool-continuation-
-    // style repeats of the same turn.
+    // style repeats of the same turn. The short default prompt routes to the
+    // fast tier (cheap-code is rule-driven by default).
     expect(statusCalls).toHaveLength(1);
     expect(statusCalls[0][0]).toBe(STATUS_KEY);
-    expect(statusCalls[0][1]).toContain("cheap-code");
-    expect(statusCalls[0][1]).toContain("opencode-go/mimo-v2.5");
+    expect(statusCalls[0][1]).toContain("fast");
+    expect(statusCalls[0][1]).toContain("openai/gpt-4o-mini");
     expect(statusCalls[0][1]).not.toContain(makeContext().messages[0].content); // no raw prompt
   });
 
@@ -168,9 +169,10 @@ describe("streamSmartRouter: delegation", () => {
     expect(opts.headers).toMatchObject({ "x-test": "1" });
     expect(opts.maxTokens).toBe(1234);
     // Delegation model is the backend model with resolved baseUrl. The
-    // short "hello there" prompt classifies into the cheap tier.
-    expect(cap.models[0].provider).toBe("opencode-go");
-    expect(cap.models[0].id).toBe("mimo-v2.5");
+    // short "hello there" prompt classifies into the fast tier (cheap is
+    // rule-driven by default).
+    expect(cap.models[0].provider).toBe("openai");
+    expect(cap.models[0].id).toBe("gpt-4o-mini");
   });
 
   it("merges provider-level headers into options", async () => {

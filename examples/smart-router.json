@@ -34,7 +34,8 @@
       "imageSignal": 0
     },
     "thresholds": {
-      "cheapMax": 0.15,
+      "$comment": "cheapMax 0 = the cheap tier is rule-driven (only explicit rules reach cheap-code). Set a positive value to re-enable score-based cheap routing.",
+      "cheapMax": 0,
       "simpleMax": 0.3,
       "mediumMax": 0.8
     },
@@ -44,8 +45,8 @@
   "escalation": {
     "$comment": "Borderline-band LLM escalation: when the score lands in [minScore, maxScore] and no rule resolved the turn, the fast model re-classifies the prompt as 'fast' or 'balanced' (one tiny call, maxTokens 4, temperature 0). The classifier can never select powerful, never overrides explicit rules, and any failure (timeout, error, junk answer) keeps the heuristic tier. 'model' is optional - it defaults to the route the fast tier resolves to. Note: escalated turns send a bounded recent transcript to the classifier model (the same provider family the prompt would go to anyway).",
     "enabled": true,
-    "minScore": 0.2,
-    "maxScore": 0.45,
+    "minScore": 0.12,
+    "maxScore": 0.35,
     "timeoutMs": 1500
   },
   "rules": [
@@ -100,11 +101,15 @@
       "route": "balanced"
     },
     {
-      "$comment": "cheap-code only for low-risk mechanical tasks; NOT a broad all-code rule (ordinary code prompts flow through the score tiers).",
+      "$comment": "cheap-code only for low-risk mechanical tasks; NOT a broad all-code rule (ordinary code prompts flow through the score tiers). With cheapMax 0 this rule is the only path to cheap-code.",
       "id": "mechanical-tasks",
       "priority": 10,
       "match": {
-        "anyKeywords": ["rename", "formatting", "update imports", "boilerplate", "simple CRUD", "test scaffold"]
+        "anyKeywords": [
+          "rename", "formatting", "format", "imports", "boilerplate",
+          "simple CRUD", "test scaffold", "typo", "spelling", "add a comment",
+          "lint", "prettier"
+        ]
       },
       "route": "cheap-code"
     }
