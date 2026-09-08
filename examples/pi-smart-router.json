@@ -1,5 +1,5 @@
 {
-  "$comment": "Full smart-router.json example (four-tier policy). Copy to ~/.pi/agent/smart-router.json (global) or <project>/.pi/smart-router.json (project, only loaded when the project is trusted). Project config replaces global config entirely. Pi's footer keeps showing 'smart-router/auto'; the [smart-router] route log line identifies the actual backend used for each turn.",
+  "$comment": "Full pi-smart-router.json example (four-tier policy). Copy to ~/.pi/agent/pi-smart-router.json (global) or <project>/.pi/pi-smart-router.json (project, only loaded when the project is trusted). Project config replaces global config entirely. Pi's footer keeps showing 'pi-smart-router/auto'; the [pi-smart-router] route log line identifies the actual backend used for each turn.",
   "version": 1,
   "defaultRoute": "balanced",
   "routes": {
@@ -8,17 +8,17 @@
       "reasoning": "preserve"
     },
     "cheap-code": {
-      "$comment": "Not local: opencode-go/mimo-v2.5 is a cheap hosted code model ($0.14/$0.28 per 1M).",
+      "$comment": "Cheap hosted code model (not local).",
       "model": "opencode-go/mimo-v2.5",
       "reasoning": "preserve"
     },
     "balanced": {
-      "$comment": "Exact lowercase model ID: gpt-5.6-luna ($0.20/$1.20 per 1M).",
+      "$comment": "Exact lowercase model ID.",
       "model": "opencode-go/gpt-5.6-luna",
       "reasoning": "preserve"
     },
     "powerful": {
-      "$comment": "kimi-k3 is dramatically more expensive ($3/$15 per 1M) - reserved for genuinely difficult work and never used as a fallback.",
+      "$comment": "Expensive; reserved for genuinely difficult work and never used as a fallback.",
       "model": "opencode-go/kimi-k3",
       "reasoning": "preserve"
     }
