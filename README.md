@@ -9,6 +9,8 @@ pi -e ./src/index.ts
 # then: /model smart-router/auto
 ```
 
+> **Note:** The default configuration, examples, and testing have only used the `opencode-go` provider. Other providers *may* work but are untested; the session header injection (`x-opencode-session`) is currently `opencode-go`-specific.
+
 ## The four tiers (recommended policy)
 
 All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer keeps showing `smart-router/auto`; the `[smart-router]` route log line identifies the actual backend used for each turn.
