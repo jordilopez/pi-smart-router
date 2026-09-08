@@ -120,11 +120,11 @@ describe("route visibility (footer status)", () => {
 
     // One status update (the decision), no duplicates across tool-continuation-
     // style repeats of the same turn. The short default prompt routes to the
-    // fast tier (cheap-code is rule-driven by default).
+    // cheap tier.
     expect(statusCalls).toHaveLength(1);
     expect(statusCalls[0][0]).toBe(STATUS_KEY);
-    expect(statusCalls[0][1]).toContain("fast");
-    expect(statusCalls[0][1]).toContain("openai/gpt-4o-mini");
+    expect(statusCalls[0][1]).toContain("cheap-code");
+    expect(statusCalls[0][1]).toContain("opencode-go/mimo-v2.5");
     expect(statusCalls[0][1]).not.toContain(makeContext().messages[0].content); // no raw prompt
   });
 
@@ -169,10 +169,9 @@ describe("streamSmartRouter: delegation", () => {
     expect(opts.headers).toMatchObject({ "x-test": "1" });
     expect(opts.maxTokens).toBe(1234);
     // Delegation model is the backend model with resolved baseUrl. The
-    // short "hello there" prompt classifies into the fast tier (cheap is
-    // rule-driven by default).
-    expect(cap.models[0].provider).toBe("openai");
-    expect(cap.models[0].id).toBe("gpt-4o-mini");
+    // short "hello there" prompt classifies into the cheap tier.
+    expect(cap.models[0].provider).toBe("opencode-go");
+    expect(cap.models[0].id).toBe("mimo-v2.5");
   });
 
   it("merges provider-level headers into options", async () => {
@@ -510,9 +509,9 @@ describe("route decision reuse", () => {
 // ============================================================================
 
 describe("borderline-band LLM escalation", () => {
-  // Score for IN_BAND_PROMPT is ~0.20 with the default classifier weights:
-  // inside the test band [0.15, 0.5] and below simpleMax (0.3), so the
-  // heuristic tier is fast and the classifier's verdict can promote it.
+  // Score for IN_BAND_PROMPT is ~0.16 with the default classifier weights:
+  // inside the test band [0.15, 0.5] and below cheapMax (0.2), so the
+  // heuristic tier is cheap and the classifier's verdict can promote it.
   const IN_BAND_PROMPT = "Could you review my changes?";
   const ESC_CONFIG: SmartRouterConfig = {
     ...CONFIG,
@@ -591,15 +590,15 @@ describe("borderline-band LLM escalation", () => {
 
     const cap = captureOf(provider);
     expect(cap.calls).toBe(2); // classifier attempt + backend
-    expect(cap.models[1].id).toBe("gpt-4o-mini"); // heuristic fast tier
-    expect(lastStatus()).toContain("fast");
+    expect(cap.models[1].id).toBe("mimo-v2.5"); // heuristic cheap tier
+    expect(lastStatus()).toContain("cheap-code");
   });
 
   it("unparseable classifier output keeps the heuristic tier", async () => {
     classifierThenBackend("I cannot classify this");
     const routerModel = makeModel({ provider: "smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
-    expect(captureOf(provider).models[1].id).toBe("gpt-4o-mini");
+    expect(captureOf(provider).models[1].id).toBe("mimo-v2.5");
   });
 
   it("out-of-band prompts never trigger a classifier call", async () => {

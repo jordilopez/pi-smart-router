@@ -34,8 +34,8 @@
       "imageSignal": 0
     },
     "thresholds": {
-      "$comment": "cheapMax 0 = the cheap tier is rule-driven (only explicit rules reach cheap-code). Set a positive value to re-enable score-based cheap routing.",
-      "cheapMax": 0,
+      "$comment": "score <= cheapMax -> cheap tier (mimo). At 0.2, trivial prompts (greetings, quick questions, one-liners) land on the cheap code model; cheap-code is additionally reachable via mechanical-task rules at any score.",
+      "cheapMax": 0.2,
       "simpleMax": 0.3,
       "mediumMax": 0.8
     },

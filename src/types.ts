@@ -65,7 +65,7 @@ export type EscalationVerdict = "fast" | "balanced";
 
 /** Score thresholds for automatic (threshold-based) route selection. */
 export interface ClassifierThresholds {
-  /** Maximum complexity score routed to the "cheap" tier (0-1). Default 0; cheap is rule-driven. */
+  /** Maximum complexity score routed to the "cheap" tier (0-1). Default 0.2 */
   cheapMax?: number;
   /** Maximum complexity score routed to the "fast" tier (0-1). Default 0.30 */
   simpleMax?: number;
@@ -151,9 +151,11 @@ export const DEFAULT_CLASSIFIER_CONFIG: Required<ClassifierConfig> = {
     imageSignal: 0,
   },
   thresholds: {
-    // Cheap-code is selected by explicit mechanical-task rules by default;
-    // set a positive cheapMax to opt back into score-based cheap routing.
-    cheapMax: 0,
+    // Scores up to 0.2 route to the cheap tier: trivial prompts (greetings,
+    // quick questions, mechanical one-liners) land on the cheap code model.
+    // cheap-code is additionally reachable through explicit mechanical-task
+    // rules at any score.
+    cheapMax: 0.2,
     simpleMax: 0.3,
     mediumMax: 0.8,
   },

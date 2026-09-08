@@ -56,12 +56,20 @@ const REASONING_KEYWORDS = [
   // Review requests are evaluative work: reading a diff/commit and judging
   // correctness. Treated as reasoning so they don't fall into the fast tier.
   "review",
+  // Opinion-seeking prompts: the user is asking for judgement, not facts.
+  "do you think",
+  "do you believe",
+  "would you say",
+  "would you consider",
 ];
 
 const REASONING_PATTERNS: RegExp[] = [
   /\b(?:why|how|what)\s+(?:is|are|does|did|would|could|should)\b/i,
   /\b(?:explain|describe|analyze|compare|evaluate)\b/i,
   /\b(?:step\s+by\s+step|think\s+through|reason\s+about)\b/i,
+  // Opinion-seeking: "do you think X", "would you say Y" — user wants
+  // judgement, not a factual lookup. These deserve at least the balanced tier.
+  /\b(?:do|would|could)\s+you\s+(?:think|believe|say|consider|recommend|prefer)\b/i,
   /\?$/, // question at end of prompt
 ];
 
