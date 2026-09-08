@@ -13,7 +13,7 @@ import type { Api, Context, Model, Provider, ProviderHeaders, SimpleStreamOption
 // ============================================================================
 
 /** Current configuration schema version. */
-export const SMART_ROUTER_CONFIG_VERSION = 1;
+export const PI_SMART_ROUTER_CONFIG_VERSION = 1;
 
 /** Backend route definition - maps a route name to a specific provider/model. */
 export interface RouteConfig {
@@ -53,7 +53,7 @@ export interface EscalationConfig {
   /**
    * Classifier backend as "provider/modelId". Optional: defaults to the model
    * of the route the "fast" tier resolves to. Must never be the router itself
-   * ("smart-router/*") - rejected at config validation and guarded at runtime.
+   * ("pi-smart-router/*") - rejected at config validation and guarded at runtime.
    */
   model?: string;
   /** Abort the classification call after this many ms; heuristic tier wins. Default 1500 */
@@ -120,7 +120,7 @@ export interface ObservabilityConfig {
   logDecisions?: boolean;
 }
 
-/** Full smart-router configuration (smart-router.json). */
+/** Full smart-router configuration (pi-smart-router.json). */
 export interface SmartRouterConfig {
   version: number;
   /** Route used when no rule matches and thresholds don't name a route. Must exist in routes. */
@@ -180,7 +180,7 @@ export const DEFAULT_ESCALATION_CONFIG: Required<EscalationConfig> = {
 
 /** Built-in defaults used when no config file exists. */
 export const BUILTIN_DEFAULTS: SmartRouterConfig = {
-  version: SMART_ROUTER_CONFIG_VERSION,
+  version: PI_SMART_ROUTER_CONFIG_VERSION,
   defaultRoute: "balanced",
   routes: {
     fast: { model: "opencode-go/glm-5.3-flash", reasoning: "preserve" },

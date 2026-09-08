@@ -135,8 +135,8 @@ describe("shouldEscalate", () => {
 
 describe("isRouterSelfRef / resolveClassifierModelRef", () => {
   it("detects router self-references case-insensitively", () => {
-    expect(isRouterSelfRef("smart-router/auto")).toBe(true);
-    expect(isRouterSelfRef("Smart-Router/Auto")).toBe(true);
+    expect(isRouterSelfRef("pi-smart-router/auto")).toBe(true);
+    expect(isRouterSelfRef("Pi-Smart-Router/Auto")).toBe(true);
     expect(isRouterSelfRef("opencode-go/glm-5.3-flash")).toBe(false);
   });
 
@@ -150,7 +150,7 @@ describe("isRouterSelfRef / resolveClassifierModelRef", () => {
   });
 
   it("returns null for a self-referencing configured model", () => {
-    const cfg = config({ escalation: { model: "smart-router/auto" } });
+    const cfg = config({ escalation: { model: "pi-smart-router/auto" } });
     expect(resolveClassifierModelRef(cfg, resolveEscalationConfig(cfg))).toBeNull();
   });
 });
@@ -172,7 +172,7 @@ describe("isClassifierBackendAvailable", () => {
     expect(isClassifierBackendAvailable(registry, "openai/gpt-4o-mini")).toBe(false);
     expect(isClassifierBackendAvailable(registry, "ghost/gpt")).toBe(false);
     expect(isClassifierBackendAvailable(registry, "no-slash")).toBe(false);
-    expect(isClassifierBackendAvailable(registry, "smart-router/auto")).toBe(false);
+    expect(isClassifierBackendAvailable(registry, "pi-smart-router/auto")).toBe(false);
   });
 });
 

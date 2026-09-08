@@ -21,14 +21,14 @@ async function importLogModule() {
 
 /** Unique scratch path under the OS temp dir. */
 function scratchPath(name: string): string {
-  return path.join(os.tmpdir(), `smart-router-log-test-${process.pid}-${name}`);
+  return path.join(os.tmpdir(), `pi-smart-router-log-test-${process.pid}-${name}`);
 }
 
 describe("debugLog sink", () => {
   const scratch: string[] = [];
 
   beforeEach(() => {
-    delete process.env.SMART_ROUTER_LOG;
+    delete process.env.PI_SMART_ROUTER_LOG;
   });
 
   afterEach(() => {
@@ -42,42 +42,42 @@ describe("debugLog sink", () => {
     vi.resetModules();
   });
 
-  it("defaults to <tmpdir>/smart-router.log when SMART_ROUTER_LOG is unset", async () => {
+  it("defaults to <tmpdir>/pi-smart-router.log when PI_SMART_ROUTER_LOG is unset", async () => {
     const { getLogPath } = await importLogModule();
-    expect(getLogPath()).toBe(path.join(os.tmpdir(), "smart-router.log"));
+    expect(getLogPath()).toBe(path.join(os.tmpdir(), "pi-smart-router.log"));
   });
 
-  it("uses SMART_ROUTER_LOG verbatim for plain absolute paths", async () => {
+  it("uses PI_SMART_ROUTER_LOG verbatim for plain absolute paths", async () => {
     const target = scratchPath("plain.log");
     scratch.push(target);
-    process.env.SMART_ROUTER_LOG = target;
+    process.env.PI_SMART_ROUTER_LOG = target;
     const { getLogPath } = await importLogModule();
     expect(getLogPath()).toBe(target);
   });
 
   it("expands a leading ~ to the home directory", async () => {
-    const relative = path.join(".pi", "agent", "logs", "smart-router-test.log");
-    process.env.SMART_ROUTER_LOG = `~/${relative}`;
+    const relative = path.join(".pi", "agent", "logs", "pi-smart-router-test.log");
+    process.env.PI_SMART_ROUTER_LOG = `~/${relative}`;
     const { getLogPath } = await importLogModule();
     expect(getLogPath()).toBe(path.join(os.homedir(), relative));
   });
 
   it("expands a bare ~ to the home directory itself", async () => {
-    process.env.SMART_ROUTER_LOG = "~";
+    process.env.PI_SMART_ROUTER_LOG = "~";
     const { getLogPath } = await importLogModule();
     expect(getLogPath()).toBe(os.homedir());
   });
 
   it("does not expand ~user forms", async () => {
-    process.env.SMART_ROUTER_LOG = "~someuser/logs/smart-router.log";
+    process.env.PI_SMART_ROUTER_LOG = "~someuser/logs/pi-smart-router.log";
     const { getLogPath } = await importLogModule();
-    expect(getLogPath()).toBe("~someuser/logs/smart-router.log");
+    expect(getLogPath()).toBe("~someuser/logs/pi-smart-router.log");
   });
 
-  it("appends timestamped [smart-router] lines", async () => {
+  it("appends timestamped [pi-smart-router] lines", async () => {
     const target = scratchPath("append.log");
     scratch.push(target);
-    process.env.SMART_ROUTER_LOG = target;
+    process.env.PI_SMART_ROUTER_LOG = target;
     const { debugLog } = await importLogModule();
 
     debugLog("first message");
@@ -85,8 +85,8 @@ describe("debugLog sink", () => {
 
     const lines = readFileSync(target, "utf8").trimEnd().split("\n");
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\] \[smart-router\] first message$/);
-    expect(lines[1]).toContain("[smart-router] second message");
+    expect(lines[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\] \[pi-smart-router\] first message$/);
+    expect(lines[1]).toContain("[pi-smart-router] second message");
   });
 
   it("swallows write errors instead of throwing", async () => {
@@ -95,7 +95,7 @@ describe("debugLog sink", () => {
     const dir = scratchPath("dir");
     scratch.push(dir);
     mkdirSync(dir, { recursive: true });
-    process.env.SMART_ROUTER_LOG = dir;
+    process.env.PI_SMART_ROUTER_LOG = dir;
     const { debugLog } = await importLogModule();
 
     expect(() => debugLog("goes nowhere")).not.toThrow();

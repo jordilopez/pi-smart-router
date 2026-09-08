@@ -15,15 +15,15 @@ const POLICY_MODELS: Record<string, string> = {
 };
 
 describe("example configs", () => {
-  it("examples/smart-router.json passes validation", async () => {
-    const raw = JSON.parse(await readFile(path.join(examplesDir, "smart-router.json"), "utf8"));
-    const config = validateConfig(raw, "examples/smart-router.json");
+  it("examples/pi-smart-router.json passes validation", async () => {
+    const raw = JSON.parse(await readFile(path.join(examplesDir, "pi-smart-router.json"), "utf8"));
+    const config = validateConfig(raw, "examples/pi-smart-router.json");
     expect(config.defaultRoute).toBe("balanced");
     expect(Object.keys(config.routes).sort()).toEqual(["balanced", "cheap-code", "fast", "powerful"]);
   });
 
-  it("examples/smart-router.json uses the exact approved model references", async () => {
-    const raw = JSON.parse(await readFile(path.join(examplesDir, "smart-router.json"), "utf8"));
+  it("examples/pi-smart-router.json uses the exact approved model references", async () => {
+    const raw = JSON.parse(await readFile(path.join(examplesDir, "pi-smart-router.json"), "utf8"));
     for (const [routeName, modelRef] of Object.entries(POLICY_MODELS)) {
       expect(raw.routes[routeName].model).toBe(modelRef);
     }
@@ -31,8 +31,8 @@ describe("example configs", () => {
     expect(raw.routes.balanced.model).toBe("opencode-go/gpt-5.6-luna");
   });
 
-  it("examples/smart-router.json never falls back to powerful and keeps powerful rules scoped", async () => {
-    const raw = JSON.parse(await readFile(path.join(examplesDir, "smart-router.json"), "utf8"));
+  it("examples/pi-smart-router.json never falls back to powerful and keeps powerful rules scoped", async () => {
+    const raw = JSON.parse(await readFile(path.join(examplesDir, "pi-smart-router.json"), "utf8"));
     expect(raw.fallbacks).not.toContain("powerful");
     expect(raw.thresholds?.mediumMax ?? raw.classifier?.thresholds?.mediumMax).toBe(0.8);
 
@@ -78,7 +78,7 @@ describe("no Nemotron anywhere in the recommended setup", () => {
   });
 
   it("examples and README mention no Nemotron", async () => {
-    for (const file of ["models.json", "smart-router.json"]) {
+    for (const file of ["models.json", "pi-smart-router.json"]) {
       const content = (await readFile(path.join(examplesDir, file), "utf8")).toLowerCase();
       expect(content).not.toContain("nemotron");
     }
@@ -96,7 +96,7 @@ describe("no Nemotron anywhere in the recommended setup", () => {
       "cheap-code",
       "mediumMax",
       "0.80",
-      "smart-router/auto",
+      "pi-smart-router/auto",
     ]) {
       expect(readme).toContain(needle);
     }

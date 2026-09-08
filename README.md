@@ -1,19 +1,19 @@
 # pi Smart Router
 
-A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a custom provider, `smart-router`, with a single model `smart-router/auto`. Each prompt is classified locally (no extra LLM calls) and routed through a **four-tier** resolver to the best configured **backend model** through Pi's model registry.
+A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a custom provider, `pi-smart-router`, with a single model `pi-pi-smart-router/auto`. Each prompt is classified locally (no extra LLM calls) and routed through a **four-tier** resolver to the best configured **backend model** through Pi's model registry.
 
 The router's classification model and its execution model are separate concerns: the router currently uses deterministic local heuristics to choose a backend, while the selected backend LLM performs the actual work. In particular, the `fast` backend is **not** used as a judge or a pre-routing classifier. An optional fast-LLM classifier is discussed as a future enhancement in [Adaptive routing and future upgrades](#adaptive-routing-and-future-upgrades).
 
 ```
 pi -e ./src/index.ts
-# then: /model smart-router/auto
+# then: /model pi-pi-smart-router/auto
 ```
 
 > **Note:** The default configuration, examples, and testing have only used the `opencode-go` provider. Other providers *may* work but are untested; the session header injection (`x-opencode-session`) is currently `opencode-go`-specific.
 
 ## The four tiers (recommended policy)
 
-All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer keeps showing `smart-router/auto`; the `[smart-router]` route log line identifies the actual backend used for each turn.
+All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer keeps showing `pi-pi-smart-router/auto`; the `[pi-smart-router]` route log line identifies the actual backend used for each turn.
 
 | Tier | Route | Backend | Cost per 1M (in/out) | Intent |
 |---|---|---|---|---|
@@ -31,15 +31,15 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 ## How it works
 
-1. `streamSimple` is called by Pi for `smart-router/auto`.
+1. `streamSimple` is called by Pi for `pi-pi-smart-router/auto`.
 2. Once per **turn**, the prompt/context is classified locally into features and a weighted **complexity score** (0-1) is computed. The classifier estimates prompt and context tokens, detects code and reasoning signals, counts keyword-group matches, and records whether tools or images are present. It does not call any LLM, inspect the quality of a previous answer, or predict success semantically.
 3. A deterministic resolver picks a **route** (see [Routing decision order](#routing-decision-order)). Each route maps to a backend `provider/modelId`. The score is compared with configurable thresholds; explicit high-confidence rules can override those thresholds.
 4. The request is delegated to the backend provider via `modelRegistry.getProvider(...).streamSimple(...)`, with auth (`apiKey`/`headers`/`baseUrl`) resolved through `modelRegistry.getApiKeyAndHeaders(...)`. All stream events are forwarded unchanged.
 5. Tool-call continuations **reuse the turn's route decision** - the backend never changes mid-turn.
 
-### Declared context window of `smart-router/auto`
+### Declared context window of `pi-pi-smart-router/auto`
 
-`smart-router/auto` is a **virtual model** - it is never contacted and has no real context window of its own. Its registered `contextWindow` (1M, mirroring the configured 1M-context backends) exists only for Pi core's view of the router: the UI display and compaction triggering. A smaller declared value would make Pi compact conversations long before the backends were actually full.
+`pi-pi-smart-router/auto` is a **virtual model** - it is never contacted and has no real context window of its own. Its registered `contextWindow` (1M, mirroring the configured 1M-context backends) exists only for Pi core's view of the router: the UI display and compaction triggering. A smaller declared value would make Pi compact conversations long before the backends were actually full.
 
 Actual per-turn fit is enforced separately and per backend: the resolver checks estimated context tokens against each backend model's own `contextWindow * 0.8` (see [Compatibility checks](#routing-decision-order)). If you add backends with smaller windows than 1M, routing stays correct, but the declared 1M makes compaction timing optimistic.
 
@@ -64,7 +64,7 @@ The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax
 Run the extension directly without installing it:
 
 ```sh
-pi -e /path/to/smart-router/src/index.ts
+pi -e /path/to/pi-smart-router/src/index.ts
 ```
 
 ### Install globally for your user
@@ -72,7 +72,7 @@ pi -e /path/to/smart-router/src/index.ts
 Install the package into Pi's global settings (the default; do not use `-l`):
 
 ```sh
-pi install /path/to/smart-router
+pi install /path/to/pi-smart-router
 ```
 
 For this repository:
@@ -85,7 +85,7 @@ Verify the installation:
 
 ```sh
 pi list
-pi --list-models | grep smart-router
+pi --list-models | grep pi-smart-router
 ```
 
 After installation, start Pi normally. You no longer need `-e`:
@@ -99,7 +99,7 @@ If your `~/.pi/agent/settings.json` contains an `enabledModels` allowlist, add t
 ```json
 {
   "enabledModels": [
-    "smart-router/auto",
+    "pi-smart-router/auto",
     "opencode-go/glm-5.3-flash",
     "opencode-go/mimo-v2.5",
     "opencode-go/gpt-5.6-luna",
@@ -108,7 +108,7 @@ If your `~/.pi/agent/settings.json` contains an `enabledModels` allowlist, add t
 }
 ```
 
-Use `pi install -l /path/to/smart-router` only for a project-local installation. Global installs are recorded in `~/.pi/agent/settings.json`; project-local installs are recorded in `.pi/settings.json`.
+Use `pi install -l /path/to/pi-smart-router` only for a project-local installation. Global installs are recorded in `~/.pi/agent/settings.json`; project-local installs are recorded in `.pi/settings.json`.
 
 The extension loads as plain TypeScript (Pi loads extensions via jiti) - no build step. `zod` is a runtime dependency; TypeScript and Vitest are only needed for development.
 
@@ -119,8 +119,8 @@ Two-file layout:
 | File | Purpose |
 |---|---|
 | `~/.pi/agent/models.json` or `<project>/.pi/models.json` | Standard Pi backend providers/models (untouched; the `opencode-go` catalog is built into pi) |
-| `~/.pi/agent/smart-router.json` | Global routing config |
-| `<project>/.pi/smart-router.json` | Project routing config (**only loaded when the project is trusted**) |
+| `~/.pi/agent/pi-smart-router.json` | Global routing config |
+| `<project>/.pi/pi-smart-router.json` | Project routing config (**only loaded when the project is trusted**) |
 
 **Precedence:** project config (if trusted and present) > global config > built-in defaults. A config file that exists replaces the lower-priority one entirely (no deep merge).
 
@@ -128,7 +128,7 @@ Built-in defaults (used when no config file exists) mirror the recommended polic
 
 Routes are only resolved when actually selected - backends that don't exist or aren't configured do **not** break the extension; they're skipped and the fallback chain takes over. But **invalid config files fail loudly on load** (see [Troubleshooting](#troubleshooting)).
 
-## Config schema (smart-router.json)
+## Config schema (pi-smart-router.json)
 
 ```jsonc
 {
@@ -224,7 +224,7 @@ just under `simpleMax`). Escalation refines exactly those borderline turns:
   demote); anything else — timeout (`timeoutMs`, default 1500), stream error,
   or an unparseable answer — keeps the heuristic tier.
 - **Never:** the classifier can never select `powerful` or `cheap`, cannot
-  point at the router itself (`smart-router/*` is rejected at config load),
+  point at the router itself (`pi-smart-router/*` is rejected at config load),
   and never overrides explicit rules, `defaultRoute`, or fallbacks.
 - **Cost:** one classifier call at most once per turn (the per-turn route
   cache applies), only for in-band prompts.
@@ -265,7 +265,7 @@ Possible future upgrades, deliberately not enabled by the current implementation
 1. **Retry with escalation** - after a pre-output backend failure, retry on the next stronger route (`fast` → `balanced` → `powerful`). This needs safeguards for partial output, duplicate tool calls, cancellation, retry limits, and additional cost. Retrying after partial output is especially risky because the user may already have seen an incomplete answer.
 2. **Cross-turn escalation memory** - remember repeated backend errors, failed tests, or unsuccessful attempts and raise a session's minimum tier for subsequent turns. This would need explicit reset/decay rules so one transient failure does not make every later prompt expensive.
 3. **Signal-based escalation** - promote when a turn reaches a configurable number of tool calls, repeated tool errors, a context-compaction event, or another observable difficulty signal. Tool-call continuations would need a clear policy for whether the current turn can switch models or only the next turn can.
-4. **Optional fast-LLM pre-classification** - ask a small, fast model to estimate task difficulty or recommend a route before the main request runs. That could provide semantic judgment that local heuristics cannot, but it adds latency and cost, requires its own timeout/fallback behavior, and would send prompt/context data to an additional model. The classifier must also be prevented from recursively routing through `smart-router/auto`.
+4. **Optional fast-LLM pre-classification** - ask a small, fast model to estimate task difficulty or recommend a route before the main request runs. That could provide semantic judgment that local heuristics cannot, but it adds latency and cost, requires its own timeout/fallback behavior, and would send prompt/context data to an additional model. The classifier must also be prevented from recursively routing through `pi-pi-smart-router/auto`.
 5. **Model-aware routing** - have either local rules or an optional classifier evaluate “is this task suitable for model X?” rather than only assigning a generic complexity score. Capability checks would still remain authoritative for context windows, images, reasoning, and output limits.
 
 Until one of these policies is implemented, users should treat the route status as the backend selected **before** the turn starts, not as a live assessment of how well the task is progressing.
@@ -274,26 +274,26 @@ Until one of these policies is implemented, users should treat the route status 
 
 - **Footer status** - after each route decision the footer shows the active backend, e.g. `↳ balanced · opencode-go/gpt-5.6-luna (0.42)`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
 - **No transcript noise** - route decisions are intentionally *not* appended to the transcript; the footer status is the single source of that information. For the full detail (reason, explanation, matched rule), check the log file below.
-- **Footer model unchanged** - Pi's normal footer model remains `smart-router/auto`; the footer status line above is where you see which backend actually served the turn.
+- **Footer model unchanged** - Pi's normal footer model remains `pi-pi-smart-router/auto`; the footer status line above is where you see which backend actually served the turn.
 
 ## Observability (log file)
 
 Diagnostics are written to a **log file, never to stdout/stderr** - raw console output from an in-process extension is painted directly over the pi TUI and corrupts the input line. One log line is emitted per route decision (never includes prompt text) and names the **actual backend**. With the default `showRouteStatus: true` the concise line is logged:
 
 ```
-[2026-02-14T10:12:33.001Z] [smart-router] route=balanced backend=opencode-go/gpt-5.6-luna score=0.42 turn=3 session=a1b2c3d4
+[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=opencode-go/gpt-5.6-luna score=0.42 turn=3 session=a1b2c3d4
 ```
 
 Setting `logDecisions: true` switches to the detailed line, which adds the matched rule, decision reason, and explanation:
 
 ```
-[2026-02-14T10:12:33.001Z] [smart-router] route=balanced backend=opencode-go/gpt-5.6-luna score=0.42 turn=3 session=a1b2c3d4 rule=- reason=threshold detail="Complexity 0.42 (balanced tier) -> route 'balanced'"
+[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=opencode-go/gpt-5.6-luna score=0.42 turn=3 session=a1b2c3d4 rule=- reason=threshold detail="Complexity 0.42 (balanced tier) -> route 'balanced'"
 ```
 
-The log file defaults to `<tmpdir>/smart-router.log` (e.g. `/tmp/smart-router.log` on macOS/Linux) and can be redirected with the `SMART_ROUTER_LOG` environment variable (a leading `~` is expanded; `~user` forms are not):
+The log file defaults to `<tmpdir>/pi-smart-router.log` (e.g. `/tmp/pi-smart-router.log` on macOS/Linux) and can be redirected with the `PI_SMART_ROUTER_LOG` environment variable (a leading `~` is expanded; `~user` forms are not):
 
 ```sh
-SMART_ROUTER_LOG=~/.pi/agent/logs/smart-router.log pi
+PI_SMART_ROUTER_LOG=~/.pi/agent/logs/pi-smart-router.log pi
 ```
 
 The `session=` prefix (first 8 characters of the Pi session id) disambiguates parallel pi sessions appending to a shared log file. Config-load diagnostics on `session_start` and config errors are also logged to the file; config errors additionally surface as a `ctx.ui.notify` toast in the TUI, and router-originated stream failures are prefixed with their error code (e.g. `BACKEND_AUTH_MISSING: ...`) in the stream error message. No raw prompt data is ever logged or stored in entries.
@@ -304,15 +304,15 @@ After a global installation:
 
 ```sh
 pi
-# in the TUI: /model smart-router/auto
+# in the TUI: /model pi-pi-smart-router/auto
 # or from the shell:
-pi --model smart-router/auto
+pi --model pi-smart-router/auto
 ```
 
 When running directly from the repository, include the extension path:
 
 ```sh
-pi -e ./src/index.ts --model smart-router/auto
+pi -e ./src/index.ts --model pi-smart-router/auto
 ```
 
 ## Troubleshooting
@@ -321,7 +321,7 @@ pi -e ./src/index.ts --model smart-router/auto
 - **`No credentials configured for provider 'opencode-go'`** - auth missing. Run `pi auth opencode-go`, set `OPENCODE_API_KEY`, or use `/login opencode-go`.
 - **`Model not found in registry: provider/modelId`** - the route references a model Pi doesn't know. Check spelling (model IDs are exact and lowercase, e.g. `gpt-5.6-luna`) and run `pi --list-models opencode-go` to see the catalog.
 - **`No compatible backend model available for any configured route`** - every route failed the availability/compatibility checks (missing auth, model missing, context window too small for the current conversation, etc.).
-- **Config error at startup** - smart-router.json is invalid (bad JSON, unknown route reference, duplicate rule id, malformed `provider/modelId`, wrong `version`). Fix the file; the message names the offending path.
+- **Config error at startup** - pi-smart-router.json is invalid (bad JSON, unknown route reference, duplicate rule id, malformed `provider/modelId`, wrong `version`). Fix the file; the message names the offending path.
 - **Kimi (powerful) shows up more than expected** - check your `mediumMax` (default 0.80) and your rules; the policy deliberately keeps kimi-k3 rare and out of the fallback chain.
 
 ## Limitations

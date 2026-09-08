@@ -30,7 +30,7 @@ import type { PromptFeatures, RouteDecision, RouterModelRegistry, SmartRouterCon
 // ============================================================================
 
 /** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
-export const STATUS_KEY = "smart-router";
+export const STATUS_KEY = "pi-smart-router";
 
 /** Footer status setter (bound to ctx.ui.setStatus). */
 export type SetStatusCallback = (key: string, text: string | undefined) => void;
@@ -185,7 +185,7 @@ function isDeltaEvent(eventType: string): boolean {
 }
 
 /**
- * The smart-router streamSimple handler: classify once per turn, resolve a
+ * The pi-smart-router streamSimple handler: classify once per turn, resolve a
  * route, delegate to the backend provider, and forward all events.
  */
 export function streamSmartRouter(
@@ -250,7 +250,7 @@ export function streamSmartRouter(
 
         // Route decision diagnostics (file sink only - never stdout, raw
         // writes are painted over the TUI input line). No prompt text is ever
-        // logged. Pi's model footer keeps showing "smart-router/auto"; these
+        // logged. Pi's model footer keeps showing "pi-smart-router/auto"; these
         // lines name the backend that actually served the turn. The session
         // prefix disambiguates parallel pi sessions sharing the log file.
         const baseLine =

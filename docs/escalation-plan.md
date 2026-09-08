@@ -30,7 +30,7 @@ original heuristic tier.
 | **Classifier can never select `powerful`** | A cheap classifier should not promote to the expensive tier. `EscalationVerdict` is `"fast" \| "balanced"` only; an `allowPowerful` opt-in is left for the future. |
 | **Bounded conversation context** | The classifier sees ≤ 6 recent messages (~2000 token budget, thinking stripped, images replaced, labeled untrusted) plus the heuristic's own signals as advisory hints. |
 | **Rules still win** | Escalation only fires when `resolveRoute` returns `reason: "threshold"` (no rule matched). A keyword rule whose route is unavailable does not suppress escalation. |
-| **Recursive routing blocked twice** | `escalation.model` referencing `smart-router/*` is rejected at config validation and guarded again at runtime. |
+| **Recursive routing blocked twice** | `escalation.model` referencing `pi-smart-router/*` is rejected at config validation and guarded again at runtime. |
 | **Timeout aborts cleanly** | The stream `signal` aborts the request; the consumption loop is catch-guarded; a 250 ms grace period lets the aborted stream drain before routing proceeds. |
 
 ## Deviations from the original plan

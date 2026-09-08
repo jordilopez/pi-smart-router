@@ -27,7 +27,7 @@ import type {
 } from "./types.js";
 
 /** The router's own provider id - the classifier must never reference it. */
-export const ROUTER_PROVIDER_ID = "smart-router";
+export const ROUTER_PROVIDER_ID = "pi-smart-router";
 
 // ============================================================================
 // Context budget for the classifier call

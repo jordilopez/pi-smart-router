@@ -13,7 +13,7 @@ import { BUILTIN_DEFAULTS } from "../src/types.js";
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "smart-router-config-"));
+  dir = await mkdtemp(path.join(tmpdir(), "pi-smart-router-config-"));
 });
 
 afterEach(async () => {
@@ -75,7 +75,7 @@ describe("loadSmartRouterConfig", () => {
     await writeFile(globalPath, JSON.stringify({ version: 1, defaultRoute: "fast", routes: { fast: { model: "no-slash", reasoning: "bogus" } } }));
     await expect(
       loadSmartRouterConfig({ globalPath, projectPath: path.join(dir, "nope.json"), projectTrusted: false }),
-    ).rejects.toThrow(/smart-router config/);
+    ).rejects.toThrow(/pi-smart-router config/);
   });
 });
 
@@ -158,9 +158,9 @@ describe("backward compatibility", () => {
 });
 
 describe("path helpers", () => {
-  it("uses ~/.pi/agent/smart-router.json globally and .pi/smart-router.json per project", () => {
-    expect(getGlobalConfigPath()).toMatch(/[.]pi[/\\]agent[/\\]smart-router[.]json$/);
-    expect(getProjectConfigPath("/tmp/x")).toBe(path.join("/tmp/x", ".pi", "smart-router.json"));
+  it("uses ~/.pi/agent/pi-smart-router.json globally and .pi/pi-smart-router.json per project", () => {
+    expect(getGlobalConfigPath()).toMatch(/[.]pi[/\\]agent[/\\]pi-smart-router[.]json$/);
+    expect(getProjectConfigPath("/tmp/x")).toBe(path.join("/tmp/x", ".pi", "pi-smart-router.json"));
   });
 });
 
@@ -216,10 +216,10 @@ describe("escalation config", () => {
 
   it("rejects the router itself as the classifier model (recursive routing)", () => {
     expect(() =>
-      validateConfig({ ...base, escalation: { model: "smart-router/auto" } }, "test"),
+      validateConfig({ ...base, escalation: { model: "pi-smart-router/auto" } }, "test"),
     ).toThrow(/recursive/i);
     expect(() =>
-      validateConfig({ ...base, escalation: { model: "SMART-ROUTER/AUTO" } }, "test"),
+      validateConfig({ ...base, escalation: { model: "PI-SMART-ROUTER/AUTO" } }, "test"),
     ).toThrow(/recursive/i);
   });
 

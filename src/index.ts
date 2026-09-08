@@ -1,8 +1,8 @@
 /**
  * Smart Router extension entry point.
  *
- * Registers the "smart-router" custom provider (selectable via
- * /model smart-router/auto) and wires lifecycle events:
+ * Registers the "pi-smart-router" custom provider (selectable via
+ * /model pi-smart-router/auto) and wires lifecycle events:
  * - session_start: capture the model registry/cwd/trust/session id, load
  *   routing config, and bind the footer status callback
  * - turn_start: reset the per-turn cached route decision (footer shows
@@ -47,11 +47,11 @@ export default function (pi: ExtensionAPI): void {
   // The baseUrl is a placeholder - the router never contacts it; it delegates
   // to backend providers via the model registry. The apiKey is a sentinel so
   // the model is selectable; it is never forwarded to backends.
-  pi.registerProvider("smart-router", {
+  pi.registerProvider("pi-smart-router", {
     name: "Smart Router",
     baseUrl: "http://localhost",
-    apiKey: "smart-router",
-    api: "smart-router-api",
+    apiKey: "pi-smart-router",
+    api: "pi-smart-router-api",
     models: ROUTER_MODELS,
     streamSimple: streamSmartRouter,
   });
@@ -77,7 +77,7 @@ export default function (pi: ExtensionAPI): void {
       });
       // Never console.log here: stdout is owned by the TUI and raw writes
       // paint over the input line. Diagnostics go to the log file instead
-      // (see log.ts; default <tmpdir>/smart-router.log).
+      // (see log.ts; default <tmpdir>/pi-smart-router.log).
       debugLog(
         `config from ${result.sourcePath} (project: ${result.isProjectConfig}); ` +
           `default route '${result.config.defaultRoute}', routes: ${Object.keys(result.config.routes).join(", ")} ` +
@@ -88,8 +88,8 @@ export default function (pi: ExtensionAPI): void {
       debugLog(`config load failed: ${message}`);
       // stderr is only safe outside the TUI (print/JSON mode); in the TUI the
       // user is notified through ctx.ui instead.
-      if (!ctx.hasUI) console.error(`[smart-router] ${message}`);
-      if (ctx.hasUI) ctx.ui.notify(`smart-router: ${message}`, "error");
+      if (!ctx.hasUI) console.error(`[pi-smart-router] ${message}`);
+      if (ctx.hasUI) ctx.ui.notify(`pi-smart-router: ${message}`, "error");
     }
   });
 

@@ -113,7 +113,7 @@ describe("route visibility (footer status)", () => {
   });
 
   it("emits exactly one footer status per route decision, no duplicates", async () => {
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext()));
     await drain(streamSmartRouter(routerModel, makeContext()));
     await drain(streamSmartRouter(routerModel, makeContext()));
@@ -129,7 +129,7 @@ describe("route visibility (footer status)", () => {
   });
 
   it("status fires again on a new turn with the new decision", async () => {
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext()));
     onTurnStart();
     await drain(streamSmartRouter(routerModel, makeContext()));
@@ -155,7 +155,7 @@ afterEach(() => {
 describe("streamSmartRouter: delegation", () => {
   it("forwards the context unchanged and injects apiKey/headers", async () => {
     const context: Context = makeContext({ messages: [{ role: "user", content: "hello there", timestamp: Date.now() }] });
-    const events = await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), context, { maxTokens: 1234 }));
+    const events = await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), context, { maxTokens: 1234 }));
 
     expect(events.map((e) => e.type)).toEqual(["start", "thinking_start", "thinking_delta", "text_start", "text_delta", "toolcall_start", "toolcall_delta", "done"]);
 
@@ -177,7 +177,7 @@ describe("streamSmartRouter: delegation", () => {
   it("merges provider-level headers into options", async () => {
     (provider as any).headers = { "x-provider": "p1" };
     registry.providerHeaders = { "x-provider": "p1" };
-    await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     const opts = captureOf(provider).options[0]!;
     expect(opts.headers?.["x-provider"]).toBe("p1");
   });
@@ -189,7 +189,7 @@ describe("streamSmartRouter: delegation", () => {
       rules: [{ id: "deep", priority: 10, match: { minComplexity: 0 }, route: "powerful" }],
     };
     setRouterStateForTesting({ config: cfg, registry, turnNumber: 1 });
-    await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext(), { maxTokens: 100 }));
+    await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext(), { maxTokens: 100 }));
     const opts = captureOf(provider).options[0]!;
     expect(opts.maxTokens).toBe(4096); // route override wins
     expect(opts.reasoning).toBe("high");
@@ -210,7 +210,7 @@ describe("streamSmartRouter: turn route caching", () => {
     (spyRegistry as any).getProvider = () => provider;
     setRouterStateForTesting({ config: CONFIG, registry: spyRegistry, turnNumber: 1 });
 
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext()));
     await drain(streamSmartRouter(routerModel, makeContext()));
     await drain(streamSmartRouter(routerModel, makeContext()));
@@ -235,7 +235,7 @@ describe("streamSmartRouter: turn route caching", () => {
     (spyRegistry as any).getProvider = () => provider;
     setRouterStateForTesting({ config: CONFIG, registry: spyRegistry, turnNumber: 1 });
 
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext()));
     onTurnStart();
     await drain(streamSmartRouter(routerModel, makeContext()));
@@ -256,7 +256,7 @@ describe("streamSmartRouter: turn route caching", () => {
     (spyRegistry as any).getProvider = () => provider;
     setRouterStateForTesting({ config: CONFIG, registry: spyRegistry, turnNumber: 1 });
 
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext()));
     // New turn simulated without onTurnStart: context gains a user message.
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [
@@ -279,7 +279,7 @@ describe("streamSmartRouter: errors", () => {
     });
     (registry as any).getProvider = () => throwing;
 
-    const events = await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    const events = await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent).toBeDefined();
     expect(errorEvent.error.errorMessage).toMatch(/^context_length_exceeded: /);
@@ -295,7 +295,7 @@ describe("streamSmartRouter: errors", () => {
       fallbacks: [],
     };
     setRouterStateForTesting({ config: cfg, registry, turnNumber: 1 });
-    const events = await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    const events = await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent).toBeDefined();
     expect(errorEvent.error.errorMessage).toContain("No compatible backend model available");
@@ -303,7 +303,7 @@ describe("streamSmartRouter: errors", () => {
 
   it("reports failed auth resolution as BACKEND_AUTH_MISSING in the stream", async () => {
     registry.auth = { ok: false, error: "no credentials found" };
-    const events = await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    const events = await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent).toBeDefined();
     expect(errorEvent.error.errorMessage).toContain("Auth resolution failed");
@@ -341,7 +341,7 @@ describe("streamSmartRouter: errors", () => {
     });
     (registry as any).getProvider = () => once;
 
-    const events = await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    const events = await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     // The backend error event is forwarded as-is; no second delegation/fallback.
     expect(events.some((e) => e.type === "text_delta")).toBe(true);
     expect(events.some((e) => e.type === "error" && e.error.errorMessage === "backend blew up")).toBe(true);
@@ -355,7 +355,7 @@ describe("OpenCode Go session header", () => {
     const ogProvider = makeFakeProvider({ id: "opencode-go" });
     (registry as any).getProvider = () => ogProvider;
 
-    await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     const opts = captureOf(ogProvider).options[0]!;
     expect(opts.headers?.["x-opencode-session"]).toBe("pi-session-abc");
     // StreamOptions.sessionId stays aligned with the header value.
@@ -368,7 +368,7 @@ describe("OpenCode Go session header", () => {
 
     await drain(
       streamSmartRouter(
-        makeModel({ provider: "smart-router", id: "auto" }),
+        makeModel({ provider: "pi-smart-router", id: "auto" }),
         makeContext(),
         { headers: { "x-opencode-session": "caller-header-id" } },
       ),
@@ -383,7 +383,7 @@ describe("OpenCode Go session header", () => {
 
     await drain(
       streamSmartRouter(
-        makeModel({ provider: "smart-router", id: "auto" }),
+        makeModel({ provider: "pi-smart-router", id: "auto" }),
         makeContext(),
         { sessionId: "explicit-session-id" },
       ),
@@ -401,7 +401,7 @@ describe("OpenCode Go session header", () => {
     };
     setRouterStateForTesting({ config: cfg, registry, turnNumber: 1, sessionId: "pi-session-abc" });
     const cap = captureOf(provider);
-    await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     const opts = cap.options[0]!;
     expect(opts.headers?.["x-opencode-session"]).toBeUndefined();
   });
@@ -418,7 +418,7 @@ describe("OpenCode Go session header", () => {
     (spyRegistry as any).getProvider = () => ogProvider;
     setRouterStateForTesting({ config: CONFIG, registry: spyRegistry, turnNumber: 1, sessionId: "pi-session-abc" });
 
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext()));
     const ctxB: Context = {
       ...makeContext(),
@@ -460,7 +460,7 @@ describe("OpenCode Go session header", () => {
 describe("streamSmartRouter: uninitialized", () => {
   it("emits an error event when the router has no registry", async () => {
     setRouterStateForTesting(null);
-    const events = await drain(streamSmartRouter(makeModel({ provider: "smart-router", id: "auto" }), makeContext()));
+    const events = await drain(streamSmartRouter(makeModel({ provider: "pi-smart-router", id: "auto" }), makeContext()));
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent).toBeDefined();
     expect(errorEvent.error.errorMessage).toContain("not initialized");
@@ -479,7 +479,7 @@ describe("route decision reuse", () => {
     (spyRegistry as any).getProvider = () => provider;
     setRouterStateForTesting({ config: CONFIG, registry: spyRegistry, turnNumber: 1 });
 
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     const ctxA = makeContext({ messages: [{ role: "user", content: "write code with a function", timestamp: Date.now() }] });
     await drain(streamSmartRouter(routerModel, ctxA));
     // Second call with toolResult continuation reuses the cached route.
@@ -573,7 +573,7 @@ describe("borderline-band LLM escalation", () => {
 
   it("in-band prompt + verdict 'balanced' routes to balanced via the classifier", async () => {
     classifierThenBackend("balanced");
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
 
     // Two provider calls: classifier first, then the chosen backend.
@@ -586,7 +586,7 @@ describe("borderline-band LLM escalation", () => {
 
   it("classifier timeout keeps the heuristic tier", async () => {
     classifierThenBackend("hang");
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
 
     const cap = captureOf(provider);
@@ -597,14 +597,14 @@ describe("borderline-band LLM escalation", () => {
 
   it("unparseable classifier output keeps the heuristic tier", async () => {
     classifierThenBackend("I cannot classify this");
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
     expect(captureOf(provider).models[1].id).toBe("gpt-4o-mini");
   });
 
   it("out-of-band prompts never trigger a classifier call", async () => {
     classifierThenBackend("balanced");
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: "hi", timestamp: 1 }] })));
     const cap = captureOf(provider);
     expect(cap.calls).toBe(1); // backend only
@@ -620,7 +620,7 @@ describe("borderline-band LLM escalation", () => {
       sessionId: "pi-session-abc",
       setStatus,
     });
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
     const cap = captureOf(provider);
     expect(cap.calls).toBe(1); // backend only (rule -> balanced)
@@ -639,7 +639,7 @@ describe("borderline-band LLM escalation", () => {
     });
     (registry as any).getProvider = () => provider;
     setRouterStateForTesting({ config: { ...CONFIG, escalation: { enabled: false } }, registry, turnNumber: 1 });
-    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
     await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
     expect(captureOf(provider).calls).toBe(1);
   });

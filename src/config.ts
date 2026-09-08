@@ -4,8 +4,8 @@
  * Two-file layout:
  * - Backend models/providers stay in pi's standard models.json
  *   (~/.pi/agent/models.json or <project>/.pi/models.json) - NOT handled here.
- * - Routing config lives in ~/.pi/agent/smart-router.json (global) or
- *   <project>/.pi/smart-router.json (project, only when the project is trusted).
+ * - Routing config lives in ~/.pi/agent/pi-smart-router.json (global) or
+ *   <project>/.pi/pi-smart-router.json (project, only when the project is trusted).
  *
  * Precedence: project config (if trusted and present) > global config >
  * built-in defaults. A present config file replaces the lower-priority one
@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { RouterError } from "./types.js";
-import { BUILTIN_DEFAULTS, DEFAULT_ESCALATION_CONFIG, SMART_ROUTER_CONFIG_VERSION } from "./types.js";
+import { BUILTIN_DEFAULTS, DEFAULT_ESCALATION_CONFIG, PI_SMART_ROUTER_CONFIG_VERSION } from "./types.js";
 import type { SmartRouterConfig } from "./types.js";
 
 // ============================================================================
@@ -111,14 +111,14 @@ export type RawSmartRouterConfig = z.infer<typeof smartRouterConfigSchema>;
 // Path helpers
 // ============================================================================
 
-/** Global routing config path: ~/.pi/agent/smart-router.json */
+/** Global routing config path: ~/.pi/agent/pi-smart-router.json */
 export function getGlobalConfigPath(): string {
-  return path.join(os.homedir(), ".pi", "agent", "smart-router.json");
+  return path.join(os.homedir(), ".pi", "agent", "pi-smart-router.json");
 }
 
-/** Project routing config path: <cwd>/.pi/smart-router.json */
+/** Project routing config path: <cwd>/.pi/pi-smart-router.json */
 export function getProjectConfigPath(cwd: string): string {
-  return path.join(cwd, ".pi", "smart-router.json");
+  return path.join(cwd, ".pi", "pi-smart-router.json");
 }
 
 // ============================================================================
@@ -132,7 +132,7 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
     const issues = parsed.error.issues
       .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
       .join("; ");
-    throw new RouterError("CONFIG_INVALID", `Invalid smart-router config (${source}): ${issues}`);
+    throw new RouterError("CONFIG_INVALID", `Invalid pi-smart-router config (${source}): ${issues}`);
   }
   const config = parsed.data as unknown as SmartRouterConfig;
 
@@ -140,7 +140,7 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
   if (!config.routes[config.defaultRoute]) {
     throw new RouterError(
       "CONFIG_INVALID",
-      `Invalid smart-router config (${source}): defaultRoute '${config.defaultRoute}' does not exist in routes (${Object.keys(config.routes).join(", ")})`,
+      `Invalid pi-smart-router config (${source}): defaultRoute '${config.defaultRoute}' does not exist in routes (${Object.keys(config.routes).join(", ")})`,
     );
   }
 
@@ -148,7 +148,7 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
     if (!route.model.includes("/")) {
       throw new RouterError(
         "CONFIG_INVALID",
-        `Invalid smart-router config (${source}): route '${name}' has malformed model reference '${route.model}' (expected 'provider/modelId')`,
+        `Invalid pi-smart-router config (${source}): route '${name}' has malformed model reference '${route.model}' (expected 'provider/modelId')`,
       );
     }
   }
@@ -158,14 +158,14 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
     if (seenRuleIds.has(rule.id)) {
       throw new RouterError(
         "CONFIG_INVALID",
-        `Invalid smart-router config (${source}): duplicate rule id '${rule.id}'`,
+        `Invalid pi-smart-router config (${source}): duplicate rule id '${rule.id}'`,
       );
     }
     seenRuleIds.add(rule.id);
     if (!config.routes[rule.route]) {
       throw new RouterError(
         "CONFIG_INVALID",
-        `Invalid smart-router config (${source}): rule '${rule.id}' references unknown route '${rule.route}'`,
+        `Invalid pi-smart-router config (${source}): rule '${rule.id}' references unknown route '${rule.route}'`,
       );
     }
   }
@@ -174,7 +174,7 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
     if (!config.routes[fallback]) {
       throw new RouterError(
         "CONFIG_INVALID",
-        `Invalid smart-router config (${source}): fallbacks entry '${fallback}' does not exist in routes`,
+        `Invalid pi-smart-router config (${source}): fallbacks entry '${fallback}' does not exist in routes`,
       );
     }
   }
@@ -187,23 +187,23 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
     if (merged.minScore > merged.maxScore) {
       throw new RouterError(
         "CONFIG_INVALID",
-        `Invalid smart-router config (${source}): escalation band [${merged.minScore}, ${merged.maxScore}] is empty (minScore must not exceed maxScore, defaults applied for omitted fields)`,
+        `Invalid pi-smart-router config (${source}): escalation band [${merged.minScore}, ${merged.maxScore}] is empty (minScore must not exceed maxScore, defaults applied for omitted fields)`,
       );
     }
     // The classifier must never be the router itself: that would make the
-    // escalation call recurse into smart-router's own stream handler.
-    if (merged.model && merged.model.toLowerCase().startsWith("smart-router/")) {
+    // escalation call recurse into pi-smart-router's own stream handler.
+    if (merged.model && merged.model.toLowerCase().startsWith("pi-smart-router/")) {
       throw new RouterError(
         "CONFIG_INVALID",
-        `Invalid smart-router config (${source}): escalation.model '${merged.model}' must not reference the smart-router provider itself (recursive routing)`,
+        `Invalid pi-smart-router config (${source}): escalation.model '${merged.model}' must not reference the pi-smart-router provider itself (recursive routing)`,
       );
     }
   }
 
-  if (config.version !== SMART_ROUTER_CONFIG_VERSION) {
+  if (config.version !== PI_SMART_ROUTER_CONFIG_VERSION) {
     throw new RouterError(
       "CONFIG_INVALID",
-      `Invalid smart-router config (${source}): unsupported version ${config.version} (expected ${SMART_ROUTER_CONFIG_VERSION})`,
+      `Invalid pi-smart-router config (${source}): unsupported version ${config.version} (expected ${PI_SMART_ROUTER_CONFIG_VERSION})`,
     );
   }
 
@@ -211,9 +211,9 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
 }
 
 interface LoadConfigOptions {
-  /** Absolute path to the global smart-router.json (defaults to ~/.pi/agent/smart-router.json) */
+  /** Absolute path to the global pi-smart-router.json (defaults to ~/.pi/agent/pi-smart-router.json) */
   globalPath?: string;
-  /** Absolute path to the project smart-router.json (defaults to <cwd>/.pi/smart-router.json) */
+  /** Absolute path to the project pi-smart-router.json (defaults to <cwd>/.pi/pi-smart-router.json) */
   projectPath?: string;
   /** Whether the project is trusted (project config only loaded when true) */
   projectTrusted: boolean;
@@ -259,7 +259,7 @@ async function tryLoadFile(filePath: string): Promise<unknown | undefined> {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT") return undefined;
-    throw new RouterError("CONFIG_INVALID", `Cannot read smart-router config at ${filePath}: ${String(error)}`);
+    throw new RouterError("CONFIG_INVALID", `Cannot read pi-smart-router config at ${filePath}: ${String(error)}`);
   }
   let parsed: unknown;
   try {
