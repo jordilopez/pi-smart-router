@@ -509,9 +509,10 @@ describe("route decision reuse", () => {
 // ============================================================================
 
 describe("borderline-band LLM escalation", () => {
-  // Score for IN_BAND_PROMPT is ~0.16 with the default classifier weights:
-  // inside the test band [0.15, 0.5] and below simpleMax (0.3), so the
-  // heuristic tier is fast and the classifier's verdict can promote it.
+  // Score for IN_BAND_PROMPT is ~0.20 with the default classifier weights:
+  // inside the test band [0.15, 0.5] and between cheapMax (0.18) and
+  // simpleMax (0.35), so the heuristic tier is fast and the classifier's
+  // verdict can promote it.
   const IN_BAND_PROMPT = "Could you review my changes?";
   const ESC_CONFIG: SmartRouterConfig = {
     ...CONFIG,

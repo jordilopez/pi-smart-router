@@ -17,7 +17,7 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 | Tier | Route | Backend | Cost per 1M (in/out) | Intent |
 |---|---|---|---|---|
-| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | $0.14 / $0.28 | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.15) plus explicit mechanical-task rules. **Not local** - mimo-v2.5 is a cheap hosted code model. |
+| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | $0.14 / $0.28 | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules. **Not local** - mimo-v2.5 is a cheap hosted code model. |
 | fast | `fast` | `opencode-go/glm-5.3-flash` | $0.075 / $0.25 | Greetings, quick questions, trivial lookups. |
 | balanced | `balanced` | `opencode-go/gpt-5.6-luna` (exact lowercase ID) | $0.20 / $1.20 | The everyday default: normal coding, reviews, multi-file edits. |
 | powerful | `powerful` | `opencode-go/kimi-k3` | $3 / $15 | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
@@ -55,7 +55,7 @@ The classifier is intentionally lightweight and deterministic. It extracts signa
 - **Tool signal** - only tools beyond a typical bare Pi coding session baseline (about eight tools) raise this signal. The standard tool set is session state, not prompt difficulty, and does not consume the cheap-tier score budget.
 - **Image signal** - whether images are present. This is normally weighted at zero because image support is enforced separately by backend capability checks.
 
-The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. With the defaults, scores up to `0.15` target cheap-code, scores through `0.30` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Cheap-code is additionally reachable at any score through explicit mechanical-task rules. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
+The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. With the defaults, scores up to `0.18` target cheap-code, scores through `0.35` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Cheap-code is additionally reachable at any score through explicit mechanical-task rules. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
 
 ## Install
 
@@ -154,8 +154,8 @@ Routes are only resolved when actually selected - backends that don't exist or a
                                       // capability checks, not the complexity score
     },
     "thresholds": {
-      "cheapMax": 0.15,                // score <= cheapMax  -> cheap tier (cheap/cheap-code/low-cost/economy)
-      "simpleMax": 0.3,               // <= simpleMax       -> fast tier (fast/simple/...)
+      "cheapMax": 0.18,                // score <= cheapMax  -> cheap tier (cheap/cheap-code/low-cost/economy)
+      "simpleMax": 0.35,               // <= simpleMax       -> fast tier (fast/simple/...)
       "mediumMax": 0.8                // <= mediumMax       -> balanced tier; above -> powerful tier
     },
     "maxPromptTokens": 4000,          // prompt analysis truncation limit
@@ -193,7 +193,7 @@ User keywords in rules are matched as **escaped literal phrases** (case-insensit
 For each new turn (re-classified only on `turn_start`):
 
 1. **Explicit rules**, highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues.
-2. **Complexity thresholds** (cheap → fast → balanced → powerful): score ≤ `cheapMax` (default `0.15`) → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. If **LLM escalation** is enabled and the score falls inside the escalation band, the classifier's verdict replaces this tier (see below).
+2. **Complexity thresholds** (cheap → fast → balanced → powerful): score ≤ `cheapMax` (default `0.18`) → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` (default `0.35`) → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. If **LLM escalation** is enabled and the score falls inside the escalation band, the classifier's verdict replaces this tier (see below).
 3. **`defaultRoute`**.
 4. **`fallbacks`**, in order.
 5. **Any available route** (declaration order).

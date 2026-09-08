@@ -192,7 +192,7 @@ describe("classifyPrompt (table-driven)", () => {
     expect(w.keywordSignal).toBe(0.15);
     expect(w.toolSignal).toBe(0.1);
     expect(w.imageSignal).toBe(0);
-    expect(BASE_CONFIG.thresholds).toEqual({ cheapMax: 0.15, simpleMax: 0.3, mediumMax: 0.8 });
+    expect(BASE_CONFIG.thresholds).toEqual({ cheapMax: 0.18, simpleMax: 0.35, mediumMax: 0.8 });
   });
 
   it("scores ordered: reasoning > code > greeting, with sane tier placement", () => {
