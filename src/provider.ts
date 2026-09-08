@@ -19,8 +19,9 @@ import type {
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { buildStreamOptions, createDelegationModel, delegateToBackend, resolveBackend } from "./backend.js";
 import { classifyPrompt } from "./classifier.js";
+import { resolveEscalationConfig, runEscalation, shouldEscalate } from "./escalation.js";
 import { debugLog } from "./log.js";
-import { resolveRoute } from "./route-resolver.js";
+import { classifierThresholds, resolveRoute, tierForScore } from "./route-resolver.js";
 import { RouterError } from "./types.js";
 import type { PromptFeatures, RouteDecision, RouterModelRegistry, SmartRouterConfig } from "./types.js";
 
@@ -210,7 +211,40 @@ export function streamSmartRouter(
       invalidateRouteIfNewPrompt(context);
       if (!currentRoute) {
         const features: PromptFeatures = classifyPrompt(context, state.config.classifier ?? {});
-        const decision = resolveRoute(state.registry, state.config, features, context);
+        let decision = resolveRoute(state.registry, state.config, features, context);
+
+        // Borderline-band LLM escalation: only for threshold decisions (rules,
+        // defaults, and fallbacks are never second-guessed), only inside the
+        // configured band, and only once per turn (the route cache below).
+        // The classifier can only return "fast" or "balanced"; null keeps the
+        // heuristic tier. state must be re-checked after the await:
+        // session_shutdown may have cleared it while the call was in flight.
+        let escalatedFromTier: string | undefined;
+        let escalationVerdict: string | undefined;
+        const esc = resolveEscalationConfig(state.config);
+        if (decision.reason === "threshold" && shouldEscalate(features, esc)) {
+          state.setStatus?.(STATUS_KEY, "router: escalating…");
+          const verdict = await runEscalation(
+            state.registry,
+            state.config,
+            features,
+            context,
+            state.sessionId,
+          );
+          if (!state || !state.registry) {
+            throw new RouterError(
+              "REGISTRY_UNAVAILABLE",
+              "Smart Router shut down while escalating",
+            );
+          }
+          const heuristicTier = tierForScore(features.complexityScore, classifierThresholds(state.config));
+          if (verdict && verdict !== heuristicTier) {
+            escalatedFromTier = heuristicTier;
+            escalationVerdict = verdict;
+            decision = resolveRoute(state.registry, state.config, features, context, verdict);
+          }
+        }
+        decision.escalatedFromTier = escalatedFromTier;
         currentRoute = decision;
         cachedUserMessageCount = context.messages.filter((m) => m.role === "user").length;
 
@@ -222,6 +256,7 @@ export function streamSmartRouter(
         const baseLine =
           `route=${decision.route} backend=${decision.backendModel} ` +
           `score=${features.complexityScore.toFixed(2)} turn=${state.turnNumber}` +
+          ` esc=${escalatedFromTier && escalationVerdict ? `${escalatedFromTier}->${escalationVerdict}` : "-"}` +
           ` session=${state.sessionId ? state.sessionId.slice(0, 8) : "-"}`;
         const observability = state.config.observability;
         if (observability?.logDecisions) {

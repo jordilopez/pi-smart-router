@@ -36,6 +36,33 @@ export interface ClassifierWeights {
   imageSignal?: number;
 }
 
+/**
+ * Borderline-band LLM escalation config. When the heuristic complexity score
+ * falls inside [minScore, maxScore] and no explicit rule resolved the turn, a
+ * cheap LLM classifier re-classifies the prompt as "fast" or "balanced".
+ * "powerful" is deliberately not an escalation target: a cheap classifier must
+ * never be able to select the expensive backend.
+ */
+export interface EscalationConfig {
+  /** Master switch. Default false (opt-in). */
+  enabled?: boolean;
+  /** Lower bound of the borderline complexity-score band. Default 0.2 */
+  minScore?: number;
+  /** Upper bound of the borderline complexity-score band. Default 0.45 */
+  maxScore?: number;
+  /**
+   * Classifier backend as "provider/modelId". Optional: defaults to the model
+   * of the route the "fast" tier resolves to. Must never be the router itself
+   * ("smart-router/*") - rejected at config validation and guarded at runtime.
+   */
+  model?: string;
+  /** Abort the classification call after this many ms; heuristic tier wins. Default 1500 */
+  timeoutMs?: number;
+}
+
+/** Escalation tiers the LLM classifier may return. */
+export type EscalationVerdict = "fast" | "balanced";
+
 /** Score thresholds for automatic (threshold-based) route selection. */
 export interface ClassifierThresholds {
   /** Maximum complexity score routed to the "cheap" tier (0-1). Default 0.15 */
@@ -101,6 +128,8 @@ export interface SmartRouterConfig {
   /** Named routes; a route is only resolved when actually selected. */
   routes: Record<string, RouteConfig>;
   classifier?: ClassifierConfig;
+  /** Borderline-band LLM escalation (opt-in). */
+  escalation?: EscalationConfig;
   /** Explicit routing rules, evaluated by descending priority */
   rules?: RoutingRule[];
   /** Ordered fallback route names tried after defaultRoute */
@@ -128,6 +157,19 @@ export const DEFAULT_CLASSIFIER_CONFIG: Required<ClassifierConfig> = {
   },
   maxPromptTokens: 4000,
   maxContextTokens: 100000,
+};
+
+/**
+ * Built-in escalation defaults. `model: ""` means "derive from the fast tier
+ * route". Partial user config is merged over these (unlike the top-level
+ * config files, nested objects merge field-by-field).
+ */
+export const DEFAULT_ESCALATION_CONFIG: Required<EscalationConfig> = {
+  enabled: false,
+  minScore: 0.2,
+  maxScore: 0.45,
+  model: "",
+  timeoutMs: 1500,
 };
 
 /** Built-in defaults used when no config file exists. */
@@ -194,6 +236,11 @@ export interface RouteDecision {
   complexityScore: number;
   isFallback: boolean;
   explanation: string;
+  /**
+   * Heuristic tier the escalation started from, when an LLM classifier verdict
+   * changed the tier (diagnostics only - no behavior attached).
+   */
+  escalatedFromTier?: string;
 }
 
 // ============================================================================

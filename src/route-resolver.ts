@@ -142,8 +142,31 @@ function routeNameMatchesTier(name: string, alias: string): boolean {
   return false;
 }
 
+/** Merged classifier thresholds for a config (defaults filled in). */
+export function classifierThresholds(config: SmartRouterConfig): {
+  cheapMax: number;
+  simpleMax: number;
+  mediumMax: number;
+} {
+  return {
+    ...{ cheapMax: 0.15, simpleMax: 0.3, mediumMax: 0.8 },
+    ...config.classifier?.thresholds,
+  };
+}
+
+/** Map a complexity score onto a tier using the given thresholds. */
+export function tierForScore(
+  score: number,
+  thresholds: { cheapMax: number; simpleMax: number; mediumMax: number },
+): "cheap" | "fast" | "balanced" | "powerful" {
+  if (score <= thresholds.cheapMax) return "cheap";
+  if (score <= thresholds.simpleMax) return "fast";
+  if (score <= thresholds.mediumMax) return "balanced";
+  return "powerful";
+}
+
 /** Find a configured route for a tier: exact alias name first, then segment match. */
-function findRouteByTier(
+export function findRouteByTier(
   config: SmartRouterConfig,
   tier: "cheap" | "fast" | "balanced" | "powerful",
 ): string | null {
@@ -162,12 +185,20 @@ function findRouteByTier(
   return null;
 }
 
-/** Resolve the route for a classified prompt. Throws RouterError when nothing is available. */
+/**
+ * Resolve the route for a classified prompt. Throws RouterError when nothing is available.
+ *
+ * `tierOverride` (from LLM escalation) replaces the score-computed tier at the
+ * threshold step only; explicit rules still win first, and overrides of the
+ * cheap/powerful tiers are impossible by type (a cheap classifier must never
+ * select the expensive backend).
+ */
 export function resolveRoute(
   registry: RouterModelRegistry,
   config: SmartRouterConfig,
   features: PromptFeatures,
   context: Context,
+  tierOverride?: "fast" | "balanced",
 ): RouteDecision {
   const promptText = getLatestUserPrompt(context);
   const score = features.complexityScore;
@@ -193,16 +224,11 @@ export function resolveRoute(
   }
 
   // 2. Score thresholds: cheap -> fast -> balanced -> powerful. Configs that
-  //    omit cheapMax get the built-in default (0.15).
-  const thresholds = {
-    ...{ cheapMax: 0.15, simpleMax: 0.3, mediumMax: 0.8 },
-    ...config.classifier?.thresholds,
-  };
-  let tier: "cheap" | "fast" | "balanced" | "powerful";
-  if (score <= thresholds.cheapMax) tier = "cheap";
-  else if (score <= thresholds.simpleMax) tier = "fast";
-  else if (score <= thresholds.mediumMax) tier = "balanced";
-  else tier = "powerful";
+  //    omit cheapMax get the built-in default (0.15). An escalation override
+  //    replaces the computed tier (never below fast / above balanced by type).
+  const thresholds = classifierThresholds(config);
+  const computedTier = tierForScore(score, thresholds);
+  const tier = tierOverride ?? computedTier;
 
   const thresholdRouteName = findRouteByTier(config, tier) ?? config.defaultRoute;
   const thresholdRouteConfig = config.routes[thresholdRouteName];
@@ -214,7 +240,9 @@ export function resolveRoute(
       reason: "threshold",
       complexityScore: score,
       isFallback: false,
-      explanation: `Complexity ${score.toFixed(2)} (${tier} tier) -> route '${thresholdRouteName}'`,
+      explanation: tierOverride
+        ? `Complexity ${score.toFixed(2)} (heuristic tier ${computedTier}) escalated to ${tierOverride} via llm-escalation -> route '${thresholdRouteName}'`
+        : `Complexity ${score.toFixed(2)} (${tier} tier) -> route '${thresholdRouteName}'`,
     };
   }
 

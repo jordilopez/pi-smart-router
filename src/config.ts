@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { RouterError } from "./types.js";
-import { BUILTIN_DEFAULTS, SMART_ROUTER_CONFIG_VERSION } from "./types.js";
+import { BUILTIN_DEFAULTS, DEFAULT_ESCALATION_CONFIG, SMART_ROUTER_CONFIG_VERSION } from "./types.js";
 import type { SmartRouterConfig } from "./types.js";
 
 // ============================================================================
@@ -80,11 +80,20 @@ const routingRuleSchema = z.object({
   route: z.string().min(1),
 });
 
+const escalationSchema = z.object({
+  enabled: z.boolean().optional(),
+  minScore: z.number().min(0).max(1).optional(),
+  maxScore: z.number().min(0).max(1).optional(),
+  model: modelRefSchema.optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
 const smartRouterConfigSchema = z.object({
   version: z.number().int().positive(),
   defaultRoute: z.string().min(1),
   routes: z.record(z.string(), routeConfigSchema),
   classifier: classifierSchema.optional(),
+  escalation: escalationSchema.optional(),
   rules: z.array(routingRuleSchema).optional(),
   fallbacks: z.array(z.string().min(1)).optional(),
   observability: z
@@ -166,6 +175,27 @@ export function validateConfig(raw: unknown, source: string): SmartRouterConfig 
       throw new RouterError(
         "CONFIG_INVALID",
         `Invalid smart-router config (${source}): fallbacks entry '${fallback}' does not exist in routes`,
+      );
+    }
+  }
+
+  if (config.escalation) {
+    // Validate the *effective* band (user values merged over defaults): a
+    // config that sets only minScore=0.8 would otherwise silently combine
+    // with the default maxScore (0.45) into an impossible, never-firing band.
+    const merged = { ...DEFAULT_ESCALATION_CONFIG, ...config.escalation };
+    if (merged.minScore > merged.maxScore) {
+      throw new RouterError(
+        "CONFIG_INVALID",
+        `Invalid smart-router config (${source}): escalation band [${merged.minScore}, ${merged.maxScore}] is empty (minScore must not exceed maxScore, defaults applied for omitted fields)`,
+      );
+    }
+    // The classifier must never be the router itself: that would make the
+    // escalation call recurse into smart-router's own stream handler.
+    if (merged.model && merged.model.toLowerCase().startsWith("smart-router/")) {
+      throw new RouterError(
+        "CONFIG_INVALID",
+        `Invalid smart-router config (${source}): escalation.model '${merged.model}' must not reference the smart-router provider itself (recursive routing)`,
       );
     }
   }

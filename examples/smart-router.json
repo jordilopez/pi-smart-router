@@ -41,6 +41,13 @@
     "maxPromptTokens": 4000,
     "maxContextTokens": 100000
   },
+  "escalation": {
+    "$comment": "Borderline-band LLM escalation: when the score lands in [minScore, maxScore] and no rule resolved the turn, the fast model re-classifies the prompt as 'fast' or 'balanced' (one tiny call, maxTokens 4, temperature 0). The classifier can never select powerful, never overrides explicit rules, and any failure (timeout, error, junk answer) keeps the heuristic tier. 'model' is optional - it defaults to the route the fast tier resolves to. Note: escalated turns send a bounded recent transcript to the classifier model (the same provider family the prompt would go to anyway).",
+    "enabled": true,
+    "minScore": 0.2,
+    "maxScore": 0.45,
+    "timeoutMs": 1500
+  },
   "rules": [
     {
       "$comment": "powerful (kimi-k3) only for high-confidence, genuinely difficult work. No generic keywords like 'analyze' or 'debug'.",

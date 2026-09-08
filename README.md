@@ -191,7 +191,7 @@ User keywords in rules are matched as **escaped literal phrases** (case-insensit
 For each new turn (re-classified only on `turn_start`):
 
 1. **Explicit rules**, highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues.
-2. **Complexity thresholds** (cheap → fast → balanced → powerful): score ≤ `cheapMax` → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`.
+2. **Complexity thresholds** (cheap → fast → balanced → powerful): score ≤ `cheapMax` → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. If **LLM escalation** is enabled and the score falls inside the escalation band, the classifier's verdict replaces this tier (see below).
 3. **`defaultRoute`**.
 4. **`fallbacks`**, in order.
 5. **Any available route** (declaration order).
@@ -204,6 +204,44 @@ For each new turn (re-classified only on `turn_start`):
 - explicit `reasoning` (`low|medium|high`) requires `model.reasoning`
 - route `maxTokens` must not exceed `model.maxTokens`
 - the model/provider must exist and have configured auth
+
+## LLM escalation (borderline band)
+
+The heuristic classifier is fast, free, and blind to meaning — prompts near a
+tier boundary can land on the wrong side (e.g. a short review request scoring
+just under `simpleMax`). Escalation refines exactly those borderline turns:
+
+- **When:** `escalation.enabled` is true, no images are present, no explicit
+  rule resolved the turn, and the complexity score is inside
+  `[minScore, maxScore]` (defaults 0.2–0.45).
+- **What happens:** one tiny call (`maxTokens: 4`, `temperature: 0`) to the
+  classifier model — `escalation.model` if set, otherwise the **fast tier's**
+  route — asking it to answer `fast` or `balanced` for the latest request,
+  given a bounded recent transcript (≤ ~2000 tokens) plus the heuristic's own
+  signals. The verdict replaces the heuristic tier (it may promote *or*
+  demote); anything else — timeout (`timeoutMs`, default 1500), stream error,
+  or an unparseable answer — keeps the heuristic tier.
+- **Never:** the classifier can never select `powerful` or `cheap`, cannot
+  point at the router itself (`smart-router/*` is rejected at config load),
+  and never overrides explicit rules, `defaultRoute`, or fallbacks.
+- **Cost:** one classifier call at most once per turn (the per-turn route
+  cache applies), only for in-band prompts.
+
+```jsonc
+{
+  "escalation": {
+    "enabled": true,
+    "minScore": 0.2,
+    "maxScore": 0.45,
+    "model": "opencode-go/glm-5.3-flash", // optional: defaults to the fast tier route
+    "timeoutMs": 1500
+  }
+}
+```
+
+The route log line includes `esc=<heuristic-tier>-><verdict>` for escalated
+turns (or `esc=-`); the footer status shows `router: escalating…` while the
+classifier call is in flight.
 
 ## Turn stability
 

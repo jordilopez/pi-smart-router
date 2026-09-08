@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkModelCapabilities, resolveRoute } from "../src/route-resolver.js";
+import { checkModelCapabilities, classifierThresholds, resolveRoute, tierForScore } from "../src/route-resolver.js";
 import { RouterError } from "../src/types.js";
 import type { PromptFeatures, RouteConfig, SmartRouterConfig } from "../src/types.js";
 import { FakeRegistry, makeContext, makeModel } from "./helpers.js";
@@ -310,5 +310,71 @@ describe("resolveRoute: fallback ordering and errors", () => {
     const f = features({ hasImages: true, imageSignal: 0.2, contextTokens: 1000 });
     const decision = resolveRoute(registry, cfg, f, ctx);
     expect(decision.route).toBe("balanced");
+  });
+});
+
+describe("resolveRoute: escalation tier override", () => {
+  const overrideRegistry = () =>
+    new FakeRegistry({
+      models: [
+        makeModel({ provider: "openai", id: "gpt-4o-mini" }),
+        makeModel({ provider: "opencode-go", id: "mimo-v2.5" }),
+        makeModel({ provider: "anthropic", id: "claude-sonnet-4-5" }),
+        makeModel({ provider: "anthropic", id: "claude-opus-4-5" }),
+      ],
+    });
+
+  it("override replaces the computed tier at the threshold step", () => {
+    // Score 0.25 -> heuristic fast tier; override promotes to balanced.
+    const decision = resolveRoute(overrideRegistry(), config(), features({ complexityScore: 0.25 }), ctx, "balanced");
+    expect(decision.reason).toBe("threshold");
+    expect(decision.route).toBe("balanced");
+    expect(decision.explanation).toContain("escalated");
+    expect(decision.explanation).toContain("fast");
+  });
+
+  it("override can also demote (balanced band -> fast)", () => {
+    // Score 0.4 -> heuristic balanced; override demotes to fast.
+    const decision = resolveRoute(overrideRegistry(), config(), features({ complexityScore: 0.4 }), ctx, "fast");
+    expect(decision.reason).toBe("threshold");
+    expect(decision.route).toBe("fast");
+  });
+
+  it("rules still beat an override", () => {
+    const withRule = config({
+      rules: [{ id: "hard", priority: 100, match: { anyKeywords: ["root cause"] }, route: "powerful" }],
+    });
+    const decision = resolveRoute(
+      overrideRegistry(),
+      withRule,
+      features(),
+      makeContext({ messages: [{ role: "user", content: "find the root cause of this", timestamp: 1 }] }),
+      "balanced",
+    );
+    expect(decision.route).toBe("powerful");
+    expect(decision.reason).toBe("rule");
+  });
+
+  it("override tier falls through to default/fallbacks when the target route is unavailable", () => {
+    const noBalanced = new FakeRegistry({
+      models: [makeModel({ provider: "openai", id: "gpt-4o-mini" })],
+      unauthenticated: ["anthropic"], // balanced + powerful unavailable
+    });
+    const decision = resolveRoute(noBalanced, config(), features({ complexityScore: 0.25 }), ctx, "balanced");
+    // defaultRoute is balanced (unavailable) -> fallback fast.
+    expect(decision.route).toBe("fast");
+    expect(decision.isFallback).toBe(true);
+  });
+
+  it("classifierThresholds + tierForScore match the resolver's tier computation", () => {
+    const t = classifierThresholds(config());
+    expect(t).toEqual({ cheapMax: 0.15, simpleMax: 0.3, mediumMax: 0.8 });
+    expect(tierForScore(0.1, t)).toBe("cheap");
+    expect(tierForScore(0.2, t)).toBe("fast");
+    expect(tierForScore(0.5, t)).toBe("balanced");
+    expect(tierForScore(0.9, t)).toBe("powerful");
+    const custom = classifierThresholds(config({ classifier: { thresholds: { mediumMax: 0.65 } } }));
+    expect(custom.mediumMax).toBe(0.65);
+    expect(tierForScore(0.7, custom)).toBe("powerful");
   });
 });

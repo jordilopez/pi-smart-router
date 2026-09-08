@@ -1,5 +1,8 @@
 # Plan: Borderline-Band LLM Escalation for the Smart Router
 
+> **Status: implemented** (see "Revisions from review" at the bottom for
+> deltas from the original plan below).
+
 ## Problem
 
 The heuristic classifier is fast and free but blind to meaning. Prompts near a
@@ -190,3 +193,52 @@ Manual acceptance (after `npm run typecheck && npm test`):
 - **Cost drift**: the band bounds how often escalation fires; `logDecisions`
   lines make the frequency visible. No retry on classifier failure (single
   attempt) to keep worst-case cost at one call per turn.
+
+---
+
+## Revisions from review (implemented)
+
+The review of this plan changed the design in five ways:
+
+1. **Escalation runs only for `reason: "threshold"` decisions** (not "no rule
+   matched"). A rule whose keywords match but whose route is unavailable must
+   not suppress escalation - `provider.ts` checks the resolved decision's
+   reason instead of duplicating rule-matching logic, then re-resolves with
+   the verdict as a `tierOverride`.
+2. **The classifier can never select `powerful`** (or `cheap`).
+   `EscalationVerdict` is `"fast" | "balanced"` only, enforced by the parser
+   (strict word-boundary match, ambiguous answers → null) and by the
+   `resolveRoute` override parameter type. An explicit `allowPowerful` opt-in
+   is left for the future; the default is no.
+3. **The classifier sees bounded conversation context**, not just the latest
+   prompt: ≤ 6 recent messages (thinking stripped, images replaced with a
+   placeholder, per-message truncation) inside a ~2000-token budget, wrapped
+   in delimiters and labeled as untrusted, plus the heuristic's signals as
+   advisory hints in the rubric.
+4. **Timeout aborts and winds down the stream**: the options `signal` aborts
+   the request, the consumption loop is catch-guarded so it can never produce
+   an unhandled rejection after losing the race, and a 250 ms grace period
+   lets the aborted stream drain before routing proceeds.
+5. **Recursive routing is blocked twice**: `escalation.model` referencing
+   `smart-router/*` is rejected at config validation (`CONFIG_INVALID`) and
+   guarded again at runtime in `resolveClassifierModelRef` /
+   `isClassifierBackendAvailable`.
+
+Additional deltas: partial `escalation` config blocks are merged field-by-field
+over `DEFAULT_ESCALATION_CONFIG` (`resolveEscalationConfig`); the route log
+gained `esc=<heuristic-tier>-><verdict>` (or `esc=-` for non-escalated turns);
+`RouteDecision.escalatedFromTier`
+carries the heuristic tier for detailed logging; escalation is **opt-in**
+(`enabled: false` by default, enabled in the example and live configs).
+Note the existing `review-tasks` keyword rule still routes review prompts to
+balanced deterministically - the rule wins before escalation, which now covers
+*other* borderline prompts instead.
+
+Final-review fixes: (a) the escalation band is validated **after** defaults are
+merged, so a partial config like `{"minScore": 0.8}` is rejected instead of
+silently forming an impossible `[0.8, 0.45]` band; (b) the classifier context
+uses `getLatestUserPrompt()` (the same source of truth as the rest of the
+router) instead of the raw last message, which can be an assistant/tool result;
+(c) the classifier request sets `reasoning: "minimal"` (lowest portable
+thinking level) so reasoning tokens cannot eat the 4-token output budget on
+models that think by default.

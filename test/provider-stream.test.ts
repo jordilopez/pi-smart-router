@@ -502,3 +502,143 @@ describe("route decision reuse", () => {
     expect(spyRegistry.findCalls).toBe(3);
   });
 });
+
+// ============================================================================
+// Borderline-band LLM escalation
+// ============================================================================
+
+describe("borderline-band LLM escalation", () => {
+  // Score for IN_BAND_PROMPT is ~0.20 with the default classifier weights:
+  // inside the test band [0.15, 0.5] and below simpleMax (0.3), so the
+  // heuristic tier is fast and the classifier's verdict can promote it.
+  const IN_BAND_PROMPT = "Could you review my changes?";
+  const ESC_CONFIG: SmartRouterConfig = {
+    ...CONFIG,
+    escalation: { enabled: true, minScore: 0.15, maxScore: 0.5, timeoutMs: 60 },
+  };
+  const RULE_CONFIG: SmartRouterConfig = {
+    ...ESC_CONFIG,
+    rules: [{ id: "review", priority: 10, match: { anyKeywords: ["review"] }, route: "balanced" }],
+  };
+
+  const statusCalls: Array<[string, string | undefined]> = [];
+  const setStatus = (key: string, text: string | undefined) => void statusCalls.push([key, text]);
+
+  function classifierThenBackend(verdict: string | null): void {
+    provider = makeFakeProvider({
+      streamFactory: (callIndex) => {
+        const stream = createAssistantMessageEventStream();
+        if (callIndex === 0 && verdict !== null) {
+          if (verdict === "hang") {
+            // Never ends: the escalation timeout must break the wait.
+            return stream;
+          }
+          stream.push({
+            type: "text_delta",
+            contentIndex: 0,
+            delta: verdict,
+            partial: { role: "assistant", content: [], api: "x", provider: "p", model: "m", usage: {} as never, stopReason: "pending", timestamp: 0 },
+          });
+          stream.end();
+          return stream;
+        }
+        emitSequence(stream);
+        return stream;
+      },
+    });
+    registry = new FakeRegistry({
+      models: [
+        makeModel({ provider: "anthropic", id: "claude-sonnet-4-5" }),
+        makeModel({ provider: "openai", id: "gpt-4o-mini" }),
+        makeModel({ provider: "opencode-go", id: "mimo-v2.5" }),
+        makeModel({ provider: "anthropic", id: "claude-opus-4-5", maxTokens: 8192 }),
+      ],
+    });
+    (registry as any).getProvider = () => provider;
+    statusCalls.length = 0;
+    setRouterStateForTesting({
+      config: ESC_CONFIG,
+      registry,
+      turnNumber: 1,
+      sessionId: "pi-session-abc",
+      setStatus,
+    });
+  }
+
+  function lastStatus(): string | undefined {
+    return statusCalls[statusCalls.length - 1]?.[1];
+  }
+
+  it("in-band prompt + verdict 'balanced' routes to balanced via the classifier", async () => {
+    classifierThenBackend("balanced");
+    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+
+    // Two provider calls: classifier first, then the chosen backend.
+    const cap = captureOf(provider);
+    expect(cap.calls).toBe(2);
+    expect(cap.models[0].id).toBe("gpt-4o-mini"); // fast-tier classifier default
+    expect(cap.models[1].id).toBe("claude-sonnet-4-5"); // balanced backend
+    expect(lastStatus()).toContain("balanced");
+  });
+
+  it("classifier timeout keeps the heuristic tier", async () => {
+    classifierThenBackend("hang");
+    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+
+    const cap = captureOf(provider);
+    expect(cap.calls).toBe(2); // classifier attempt + backend
+    expect(cap.models[1].id).toBe("gpt-4o-mini"); // heuristic fast tier
+    expect(lastStatus()).toContain("fast");
+  });
+
+  it("unparseable classifier output keeps the heuristic tier", async () => {
+    classifierThenBackend("I cannot classify this");
+    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+    expect(captureOf(provider).models[1].id).toBe("gpt-4o-mini");
+  });
+
+  it("out-of-band prompts never trigger a classifier call", async () => {
+    classifierThenBackend("balanced");
+    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: "hi", timestamp: 1 }] })));
+    const cap = captureOf(provider);
+    expect(cap.calls).toBe(1); // backend only
+  });
+
+  it("rule-matched turns never trigger a classifier call", async () => {
+    classifierThenBackend("balanced");
+    (registry as any).getProvider = () => provider;
+    setRouterStateForTesting({
+      config: RULE_CONFIG,
+      registry,
+      turnNumber: 1,
+      sessionId: "pi-session-abc",
+      setStatus,
+    });
+    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+    const cap = captureOf(provider);
+    expect(cap.calls).toBe(1); // backend only (rule -> balanced)
+    expect(cap.models[0].id).toBe("claude-sonnet-4-5");
+  });
+
+  it("escalation is skipped entirely when disabled", async () => {
+    provider = fullSequenceProvider();
+    registry = new FakeRegistry({
+      models: [
+        makeModel({ provider: "anthropic", id: "claude-sonnet-4-5" }),
+        makeModel({ provider: "openai", id: "gpt-4o-mini" }),
+        makeModel({ provider: "opencode-go", id: "mimo-v2.5" }),
+        makeModel({ provider: "anthropic", id: "claude-opus-4-5", maxTokens: 8192 }),
+      ],
+    });
+    (registry as any).getProvider = () => provider;
+    setRouterStateForTesting({ config: { ...CONFIG, escalation: { enabled: false } }, registry, turnNumber: 1 });
+    const routerModel = makeModel({ provider: "smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+    expect(captureOf(provider).calls).toBe(1);
+  });
+});

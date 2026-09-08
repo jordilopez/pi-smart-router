@@ -163,3 +163,68 @@ describe("path helpers", () => {
     expect(getProjectConfigPath("/tmp/x")).toBe(path.join("/tmp/x", ".pi", "smart-router.json"));
   });
 });
+
+describe("escalation config", () => {
+  const base = {
+    version: 1,
+    defaultRoute: "balanced",
+    routes: {
+      fast: { model: "openai/gpt-4o-mini" },
+      balanced: { model: "anthropic/claude-sonnet-4-5" },
+    },
+  };
+
+  it("accepts a full escalation block", () => {
+    const cfg = validateConfig(
+      { ...base, escalation: { enabled: true, minScore: 0.2, maxScore: 0.45, model: "openai/gpt-4o-mini", timeoutMs: 1500 } },
+      "test",
+    );
+    expect(cfg.escalation?.enabled).toBe(true);
+    expect(cfg.escalation?.model).toBe("openai/gpt-4o-mini");
+  });
+
+  it("accepts a partial escalation block (defaults merged at runtime)", () => {
+    const cfg = validateConfig({ ...base, escalation: { enabled: true } }, "test");
+    expect(cfg.escalation?.enabled).toBe(true);
+    expect(cfg.escalation?.minScore).toBeUndefined();
+  });
+
+  it("accepts configs without an escalation block", () => {
+    const cfg = validateConfig({ ...base }, "test");
+    expect(cfg.escalation).toBeUndefined();
+  });
+
+  it("rejects minScore > maxScore", () => {
+    expect(() =>
+      validateConfig({ ...base, escalation: { minScore: 0.5, maxScore: 0.4 } }, "test"),
+    ).toThrow(/minScore/);
+  });
+
+  it("validates the effective band after defaults are merged", () => {
+    // minScore 0.8 alone would combine with the default maxScore 0.45 into an
+    // impossible, never-firing band - rejected instead of silently disabled.
+    expect(() => validateConfig({ ...base, escalation: { minScore: 0.8 } }, "test")).toThrow(/empty/);
+    // maxScore below the default minScore is equally impossible.
+    expect(() => validateConfig({ ...base, escalation: { maxScore: 0.1 } }, "test")).toThrow(/empty/);
+    // A valid partial band still passes.
+    expect(() => validateConfig({ ...base, escalation: { maxScore: 0.35 } }, "test")).not.toThrow();
+  });
+
+  it("rejects malformed classifier model refs", () => {
+    expect(() => validateConfig({ ...base, escalation: { model: "no-slash" } }, "test")).toThrow(/provider\/modelId/);
+  });
+
+  it("rejects the router itself as the classifier model (recursive routing)", () => {
+    expect(() =>
+      validateConfig({ ...base, escalation: { model: "smart-router/auto" } }, "test"),
+    ).toThrow(/recursive/i);
+    expect(() =>
+      validateConfig({ ...base, escalation: { model: "SMART-ROUTER/AUTO" } }, "test"),
+    ).toThrow(/recursive/i);
+  });
+
+  it("rejects non-positive timeouts", () => {
+    expect(() => validateConfig({ ...base, escalation: { timeoutMs: 0 } }, "test")).toThrow();
+    expect(() => validateConfig({ ...base, escalation: { timeoutMs: -5 } }, "test")).toThrow();
+  });
+});
