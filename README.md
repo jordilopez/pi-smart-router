@@ -2,6 +2,8 @@
 
 A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a custom provider, `smart-router`, with a single model `smart-router/auto`. Each prompt is classified locally (no extra LLM calls) and routed through a **four-tier** resolver to the best configured **backend model** through Pi's model registry.
 
+The router's classification model and its execution model are separate concerns: the router currently uses deterministic local heuristics to choose a backend, while the selected backend LLM performs the actual work. In particular, the `fast` backend is **not** used as a judge or a pre-routing classifier. An optional fast-LLM classifier is discussed as a future enhancement in [Adaptive routing and future upgrades](#adaptive-routing-and-future-upgrades).
+
 ```
 pi -e ./src/index.ts
 # then: /model smart-router/auto
@@ -28,10 +30,24 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 ## How it works
 
 1. `streamSimple` is called by Pi for `smart-router/auto`.
-2. Once per **turn**, the prompt/context is classified into features (token estimates, code likelihood, reasoning likelihood, keyword groups, tools) and a weighted **complexity score** (0-1) is computed.
-3. A deterministic resolver picks a **route** (see [Routing decision order](#routing-decision-order)). Each route maps to a backend `provider/modelId`.
+2. Once per **turn**, the prompt/context is classified locally into features and a weighted **complexity score** (0-1) is computed. The classifier estimates prompt and context tokens, detects code and reasoning signals, counts keyword-group matches, and records whether tools or images are present. It does not call any LLM, inspect the quality of a previous answer, or predict success semantically.
+3. A deterministic resolver picks a **route** (see [Routing decision order](#routing-decision-order)). Each route maps to a backend `provider/modelId`. The score is compared with configurable thresholds; explicit high-confidence rules can override those thresholds.
 4. The request is delegated to the backend provider via `modelRegistry.getProvider(...).streamSimple(...)`, with auth (`apiKey`/`headers`/`baseUrl`) resolved through `modelRegistry.getApiKeyAndHeaders(...)`. All stream events are forwarded unchanged.
 5. Tool-call continuations **reuse the turn's route decision** - the backend never changes mid-turn.
+
+### How the local complexity score is formed
+
+The classifier is intentionally lightweight and deterministic. It extracts signals from the latest user prompt and the current context, normalizes them to 0–1, then combines them with configurable weights:
+
+- **Prompt size** - an estimated token count using `characters / 4`, normalized against `maxPromptTokens`.
+- **Context size** - an estimated count including the system prompt, messages, tool-call arguments, and images. This has a deliberately low default weight so a long-running session does not automatically become a powerful-tier request.
+- **Code likelihood** - code-related words and patterns such as fenced code, declarations, file paths, stack traces, and code punctuation.
+- **Reasoning likelihood** - reasoning and evaluation language such as “compare”, “why”, “trade-off”, “root cause”, “design”, and “review”.
+- **Keyword signal** - matches across reasoning, architecture, debugging, performance, and security keyword groups.
+- **Tool signal** - whether tools are available and how many are attached to the context.
+- **Image signal** - whether images are present. This is normally weighted at zero because image support is enforced separately by backend capability checks.
+
+The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. For example, with the defaults, scores up to `0.15` target cheap-code, scores up to `0.30` target fast, scores up to `0.80` target balanced, and higher scores target powerful. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
 
 ## Install
 
@@ -189,6 +205,25 @@ For each new turn (re-classified only on `turn_start`):
 - `turn_start` resets the cache. A message-based heuristic (new user prompt after tool results) is kept as fallback safety.
 - The backend is never switched after the first stream event; failures after content has been emitted surface as stream errors, not fallbacks.
 
+## Adaptive routing and future upgrades
+
+The current router is **prompt-based and deterministic**, not adaptive. It does not dynamically promote a request from `fast` to `balanced` because the task takes longer, produces an incorrect patch, enters a long tool loop, or appears difficult in hindsight. There is no success/failure feedback loop:
+
+- A backend that is unavailable or incompatible is skipped **before streaming** and the normal fallback order is used.
+- Once streaming begins, the selected backend is fixed for the turn. Backend errors are surfaced as stream errors; they are not retried on another route.
+- If a user sends a follow-up, that is a new turn and is classified from the new context. A follow-up such as “find the root cause” may naturally score higher, but that is not escalation memory.
+- A successful response is not validated by the router. It cannot tell whether a code change is correct unless the user or a later tool result makes that visible in a new request.
+
+Possible future upgrades, deliberately not enabled by the current implementation:
+
+1. **Retry with escalation** - after a pre-output backend failure, retry on the next stronger route (`fast` → `balanced` → `powerful`). This needs safeguards for partial output, duplicate tool calls, cancellation, retry limits, and additional cost. Retrying after partial output is especially risky because the user may already have seen an incomplete answer.
+2. **Cross-turn escalation memory** - remember repeated backend errors, failed tests, or unsuccessful attempts and raise a session's minimum tier for subsequent turns. This would need explicit reset/decay rules so one transient failure does not make every later prompt expensive.
+3. **Signal-based escalation** - promote when a turn reaches a configurable number of tool calls, repeated tool errors, a context-compaction event, or another observable difficulty signal. Tool-call continuations would need a clear policy for whether the current turn can switch models or only the next turn can.
+4. **Optional fast-LLM pre-classification** - ask a small, fast model to estimate task difficulty or recommend a route before the main request runs. That could provide semantic judgment that local heuristics cannot, but it adds latency and cost, requires its own timeout/fallback behavior, and would send prompt/context data to an additional model. The classifier must also be prevented from recursively routing through `smart-router/auto`.
+5. **Model-aware routing** - have either local rules or an optional classifier evaluate “is this task suitable for model X?” rather than only assigning a generic complexity score. Capability checks would still remain authoritative for context windows, images, reasoning, and output limits.
+
+Until one of these policies is implemented, users should treat the route status as the backend selected **before** the turn starts, not as a live assessment of how well the task is progressing.
+
 ## Route visibility in Pi's UI
 
 - **Footer status** - after each route decision the footer shows the active backend, e.g. `↳ balanced · opencode-go/gpt-5.6-luna (0.42)`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
@@ -247,9 +282,11 @@ pi -e ./src/index.ts --model smart-router/auto
 
 - Routing is **per turn, not per tool call**: tool-call continuations keep the turn's route even if the intermediate prompt looks different.
 - Token counts are **heuristics** (`chars/4`, images ≈ 512 tokens); treat thresholds as approximate.
-- Classification is local heuristics (keywords/patterns) - no extra LLM call, and no semantic understanding.
+- Classification is local heuristics (keywords/patterns) - no extra LLM call, and no semantic understanding. The `fast` route is an execution backend, not a classifier or judge.
+- Routing does not currently evaluate answer quality, test outcomes, tool-loop length, or whether a task is “succeeding” after it starts.
 - `reasoning: "off"` cannot force-disable thinking on providers that always think; it only avoids requesting reasoning. `preserve` keeps the session's thinking level.
 - Backend availability is evaluated when the decision is made; a backend that dies mid-turn surfaces as a stream error (no mid-turn failover).
+- Adaptive escalation, retry-with-a-stronger-model, and optional fast-LLM classification are future design options, not current behavior.
 
 ## Development
 
