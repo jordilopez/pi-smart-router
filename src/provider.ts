@@ -22,7 +22,7 @@ import { classifyPrompt } from "./classifier.js";
 import { resolveEscalationConfig, runEscalation, shouldEscalate } from "./escalation.js";
 import { debugLog } from "./log.js";
 import { classifierThresholds, resolveRoute, tierForScore } from "./route-resolver.js";
-import { RouterError } from "./types.js";
+import { ROUTE_EMOJI, RouterError } from "./types.js";
 import type { PromptFeatures, RouteDecision, RouterModelRegistry, SmartRouterConfig } from "./types.js";
 
 // ============================================================================
@@ -31,6 +31,7 @@ import type { PromptFeatures, RouteDecision, RouterModelRegistry, SmartRouterCon
 
 /** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
 export const STATUS_KEY = "pi-smart-router";
+
 
 /** Footer status setter (bound to ctx.ui.setStatus). */
 export type SetStatusCallback = (key: string, text: string | undefined) => void;
@@ -272,9 +273,10 @@ export function streamSmartRouter(
         // UI visibility: footer status only. Runs only on first
         // classification of the turn (never on tool continuations), and
         // never includes raw prompt text.
+        const glyph = decision.routeConfig.emoji ?? ROUTE_EMOJI[decision.route] ?? "↳";
         state.setStatus?.(
           STATUS_KEY,
-          `↳ ${decision.route} · ${decision.backendModel} (${features.complexityScore.toFixed(2)})`,
+          `${glyph} ${decision.route} · ${decision.backendModel} (${features.complexityScore.toFixed(2)})`,
         );
       }
 

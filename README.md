@@ -138,7 +138,8 @@ Routes are only resolved when actually selected - backends that don't exist or a
     "<name>": {
       "model": "provider/modelId",    // required, must contain "/"
       "reasoning": "preserve",        // optional: preserve|off|low|medium|high
-      "maxTokens": 32000              // optional output cap (must fit the model)
+      "maxTokens": 32000,             // optional output cap (must fit the model)
+      "emoji": "🎯"                   // optional footer glyph (max 8 code points)
     }
   },
   "classifier": {
@@ -272,7 +273,7 @@ Until one of these policies is implemented, users should treat the route status 
 
 ## Route visibility in Pi's UI
 
-- **Footer status** - after each route decision the footer shows the active backend, e.g. `↳ balanced · opencode-go/gpt-5.6-luna (0.42)`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
+- **Footer status** - after each route decision the footer shows the active backend, e.g. `🎯 balanced · opencode-go/gpt-5.6-luna (0.42)`. The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
 - **No transcript noise** - route decisions are intentionally *not* appended to the transcript; the footer status is the single source of that information. For the full detail (reason, explanation, matched rule), check the log file below.
 - **Footer model unchanged** - Pi's normal footer model remains `pi-smart-router/auto`; the footer status line above is where you see which backend actually served the turn.
 

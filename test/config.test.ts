@@ -131,6 +131,51 @@ describe("validateConfig semantics", () => {
     };
     expect(() => validateConfig(cfg, "test")).not.toThrow();
   });
+
+  it("emoji with a valid glyph passes", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "🎯" } } };
+    expect(() => validateConfig(cfg, "test")).not.toThrow();
+  });
+
+  it("emoji without control characters passes", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "↳" } } };
+    expect(() => validateConfig(cfg, "test")).not.toThrow();
+  });
+
+  it("ZWJ emoji sequences pass validation", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "👩‍💻" } } };
+    expect(() => validateConfig(cfg, "test")).not.toThrow();
+  });
+
+  it("rejects emoji containing bidi override characters", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "a\u202Eb" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow();
+  });
+
+  it("rejects emoji containing newline control characters", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "bad\n" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow(/control/);
+  });
+
+  it("rejects emoji containing ANSI escape sequences", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "\u001b[31m" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow(/control/);
+  });
+
+  it("rejects empty emoji", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow();
+  });
+
+  it("rejects emoji longer than eight code points", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "123456789" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow();
+  });
+
+  it("family emoji (8 code points, 11 UTF-16 units) passes validation", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "👨‍👩‍👧‍👦" } } };
+    expect(() => validateConfig(cfg, "test")).not.toThrow();
+  });
 });
 
 describe("backward compatibility", () => {

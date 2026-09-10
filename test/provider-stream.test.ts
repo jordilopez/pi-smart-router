@@ -146,6 +146,55 @@ describe("route visibility (footer status)", () => {
     expect(statusCalls.at(-1)).toEqual([STATUS_KEY, undefined]);
     expect(getRouterState()).toBeNull();
   });
+
+  it("uses the configured emoji in the footer status", async () => {
+    setRouterStateForTesting({
+      config: {
+        ...CONFIG,
+        routes: {
+          ...CONFIG.routes,
+          "cheap-code": { model: "opencode-go/mimo-v2.5", emoji: "🔧" },
+        },
+      },
+      registry,
+      turnNumber: 1,
+      setStatus,
+    });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext()));
+    expect(statusCalls[0][1]).toMatch(/^🔧 /);
+  });
+
+  it("falls back to built-in glyph for standard routes without emoji", async () => {
+    setRouterStateForTesting({
+      config: CONFIG,
+      registry,
+      turnNumber: 1,
+      setStatus,
+    });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext()));
+    // CONFIG routes have no emoji field; standard route "cheap-code" gets 🪙.
+    expect(statusCalls[0][1]).toMatch(/^🪙 /);
+  });
+
+  it("falls back to ↳ for unknown custom routes", async () => {
+    setRouterStateForTesting({
+      config: {
+        ...CONFIG,
+        routes: {
+          custom: { model: "opencode-go/mimo-v2.5" },
+        },
+        defaultRoute: "custom",
+      },
+      registry,
+      turnNumber: 1,
+      setStatus,
+    });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext()));
+    expect(statusCalls[0][1]).toMatch(/^↳ /);
+  });
 });
 
 afterEach(() => {

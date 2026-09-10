@@ -23,6 +23,8 @@ export interface RouteConfig {
   reasoning?: "preserve" | "off" | "low" | "medium" | "high";
   /** Optional max tokens override for this route */
   maxTokens?: number;
+  /** Optional emoji prefix shown in the footer status for this route (e.g. "⚡", "🎯") */
+  emoji?: string;
 }
 
 /** Classifier weight configuration for complexity scoring. */
@@ -178,15 +180,23 @@ export const DEFAULT_ESCALATION_CONFIG: Required<EscalationConfig> = {
   timeoutMs: 1500,
 };
 
+/** Built-in emoji for the default four-tier routes. Single source of truth shared between the config defaults and the provider's footer fallback. */
+export const ROUTE_EMOJI: Record<string, string> = {
+  fast: "⚡",
+  "cheap-code": "🪙",
+  balanced: "🎯",
+  powerful: "💎",
+};
+
 /** Built-in defaults used when no config file exists. */
 export const BUILTIN_DEFAULTS: SmartRouterConfig = {
   version: PI_SMART_ROUTER_CONFIG_VERSION,
   defaultRoute: "balanced",
   routes: {
-    fast: { model: "opencode-go/glm-5.3-flash", reasoning: "preserve" },
-    "cheap-code": { model: "opencode-go/mimo-v2.5", reasoning: "preserve" },
-    balanced: { model: "opencode-go/gpt-5.6-luna", reasoning: "preserve" },
-    powerful: { model: "opencode-go/kimi-k3", reasoning: "preserve" },
+    fast: { model: "opencode-go/glm-5.3-flash", reasoning: "preserve", emoji: ROUTE_EMOJI.fast },
+    "cheap-code": { model: "opencode-go/mimo-v2.5", reasoning: "preserve", emoji: ROUTE_EMOJI["cheap-code"] },
+    balanced: { model: "opencode-go/gpt-5.6-luna", reasoning: "preserve", emoji: ROUTE_EMOJI.balanced },
+    powerful: { model: "opencode-go/kimi-k3", reasoning: "preserve", emoji: ROUTE_EMOJI.powerful },
   },
   // Never include "powerful" here: kimi-k3 is an order of magnitude more
   // expensive than the other tiers and must only be reached deliberately.

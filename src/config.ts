@@ -37,6 +37,18 @@ const routeConfigSchema = z.object({
   model: modelRefSchema,
   reasoning: z.enum(["preserve", "off", "low", "medium", "high"]).optional(),
   maxTokens: z.number().int().positive().optional(),
+  emoji: z
+    .string()
+    .min(1)
+    .regex(
+      /^[^\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]+$/u,
+      "emoji must not contain control, line separator, bidi override, or bidi isolate characters",
+    )
+    .refine(
+      (v) => Array.from(v).length <= 8,
+      { message: "emoji must be at most 8 Unicode code points" },
+    )
+    .optional(),
 });
 
 const classifierSchema = z.object({

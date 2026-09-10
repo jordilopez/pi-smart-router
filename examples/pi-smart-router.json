@@ -5,22 +5,26 @@
   "routes": {
     "fast": {
       "model": "opencode-go/glm-5.3-flash",
-      "reasoning": "preserve"
+      "reasoning": "preserve",
+      "emoji": "⚡"
     },
     "cheap-code": {
       "$comment": "Cheap hosted code model (not local).",
       "model": "opencode-go/mimo-v2.5",
-      "reasoning": "preserve"
+      "reasoning": "preserve",
+      "emoji": "🪙"
     },
     "balanced": {
       "$comment": "Exact lowercase model ID.",
       "model": "opencode-go/gpt-5.6-luna",
-      "reasoning": "preserve"
+      "reasoning": "preserve",
+      "emoji": "🎯"
     },
     "powerful": {
       "$comment": "Expensive; reserved for genuinely difficult work and never used as a fallback.",
       "model": "opencode-go/kimi-k3",
-      "reasoning": "preserve"
+      "reasoning": "preserve",
+      "emoji": "💎"
     }
   },
   "classifier": {
