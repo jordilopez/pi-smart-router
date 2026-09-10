@@ -4,7 +4,7 @@
   "defaultRoute": "balanced",
   "routes": {
     "fast": {
-      "model": "opencode-go/glm-5.3-flash",
+      "model": "opencode-go/deepseek-v4-flash",
       "reasoning": "preserve",
       "emoji": "⚡"
     },

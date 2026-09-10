@@ -1,5 +1,5 @@
 {
-  "$comment": "Example backends for the smart-router extension. The recommended setup uses pi's built-in 'opencode-go' provider (auth via OPENCODE_API_KEY, 'pi auth opencode-go', or '/login opencode-go'). Copy this into ~/.pi/agent/models.json (global) or <project>/.pi/models.json only if you need to override model defaults - the four routed models (glm-5.3-flash, mimo-v2.5, gpt-5.6-luna, kimi-k3) ship in pi's built-in opencode-go catalog.",
+  "$comment": "Example backends for the smart-router extension. The recommended setup uses pi's built-in 'opencode-go' provider (auth via OPENCODE_API_KEY, 'pi auth opencode-go', or '/login opencode-go'). Copy this into ~/.pi/agent/models.json (global) or <project>/.pi/models.json only if you need to override model defaults - the four routed models (deepseek-v4-flash, mimo-v2.5, gpt-5.6-luna, kimi-k3) ship in pi's built-in opencode-go catalog.",
   "providers": {
     "opencode-go": {
       "apiKey": "$OPENCODE_API_KEY"

@@ -18,7 +18,7 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
 | cheap | `cheap-code` | `opencode-go/mimo-v2.5` | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules. **Not local** - mimo-v2.5 is a cheap hosted code model. |
-| fast | `fast` | `opencode-go/glm-5.3-flash` | Greetings, quick questions, trivial lookups. |
+| fast | `fast` | `opencode-go/deepseek-v4-flash` | Greetings, quick questions, trivial lookups. |
 | balanced | `balanced` | `opencode-go/gpt-5.6-luna` (exact lowercase ID) | The everyday default: normal coding, reviews, multi-file edits. |
 | powerful | `powerful` | `opencode-go/kimi-k3` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
 
@@ -100,7 +100,7 @@ If your `~/.pi/agent/settings.json` contains an `enabledModels` allowlist, add t
 {
   "enabledModels": [
     "pi-smart-router/auto",
-    "opencode-go/glm-5.3-flash",
+    "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
     "opencode-go/gpt-5.6-luna",
     "opencode-go/kimi-k3"
@@ -124,7 +124,7 @@ Two-file layout:
 
 **Precedence:** project config (if trusted and present) > global config > built-in defaults. A config file that exists replaces the lower-priority one entirely (no deep merge).
 
-Built-in defaults (used when no config file exists) mirror the recommended policy: `fast` → `opencode-go/glm-5.3-flash`, `cheap-code` → `opencode-go/mimo-v2.5`, `balanced` → `opencode-go/gpt-5.6-luna`, `powerful` → `opencode-go/kimi-k3`; defaultRoute `balanced`; fallbacks `["fast", "cheap-code"]`.
+Built-in defaults (used when no config file exists) mirror the recommended policy: `fast` → `opencode-go/deepseek-v4-flash`, `cheap-code` → `opencode-go/mimo-v2.5`, `balanced` → `opencode-go/gpt-5.6-luna`, `powerful` → `opencode-go/kimi-k3`; defaultRoute `balanced`; fallbacks `["fast", "cheap-code"]`.
 
 Routes are only resolved when actually selected - backends that don't exist or aren't configured do **not** break the extension; they're skipped and the fallback chain takes over. But **invalid config files fail loudly on load** (see [Troubleshooting](#troubleshooting)).
 
@@ -236,7 +236,7 @@ just under `simpleMax`). Escalation refines exactly those borderline turns:
     "enabled": true,
     "minScore": 0.12,
     "maxScore": 0.35,
-    "model": "opencode-go/glm-5.3-flash", // optional: defaults to the fast tier route
+    "model": "opencode-go/deepseek-v4-flash", // optional: defaults to the fast tier route
     "timeoutMs": 1500
   }
 }

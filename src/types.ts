@@ -193,7 +193,7 @@ export const BUILTIN_DEFAULTS: SmartRouterConfig = {
   version: PI_SMART_ROUTER_CONFIG_VERSION,
   defaultRoute: "balanced",
   routes: {
-    fast: { model: "opencode-go/glm-5.3-flash", reasoning: "preserve", emoji: ROUTE_EMOJI.fast },
+    fast: { model: "opencode-go/deepseek-v4-flash", reasoning: "preserve", emoji: ROUTE_EMOJI.fast },
     "cheap-code": { model: "opencode-go/mimo-v2.5", reasoning: "preserve", emoji: ROUTE_EMOJI["cheap-code"] },
     balanced: { model: "opencode-go/gpt-5.6-luna", reasoning: "preserve", emoji: ROUTE_EMOJI.balanced },
     powerful: { model: "opencode-go/kimi-k3", reasoning: "preserve", emoji: ROUTE_EMOJI.powerful },

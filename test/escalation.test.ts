@@ -137,7 +137,7 @@ describe("isRouterSelfRef / resolveClassifierModelRef", () => {
   it("detects router self-references case-insensitively", () => {
     expect(isRouterSelfRef("pi-smart-router/auto")).toBe(true);
     expect(isRouterSelfRef("Pi-Smart-Router/Auto")).toBe(true);
-    expect(isRouterSelfRef("opencode-go/glm-5.3-flash")).toBe(false);
+    expect(isRouterSelfRef("opencode-go/deepseek-v4-flash")).toBe(false);
   });
 
   it("defaults to the fast-tier route model", () => {
