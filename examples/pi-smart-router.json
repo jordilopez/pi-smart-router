@@ -4,25 +4,25 @@
   "defaultRoute": "balanced",
   "routes": {
     "fast": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "<provider>/<fast-model>",
       "reasoning": "preserve",
       "emoji": "⚡"
     },
     "cheap-code": {
       "$comment": "Cheap hosted code model (not local).",
-      "model": "opencode-go/mimo-v2.5",
+      "model": "<provider>/<cheap-model>",
       "reasoning": "preserve",
       "emoji": "🪙"
     },
     "balanced": {
       "$comment": "Exact lowercase model ID.",
-      "model": "opencode-go/gpt-5.6-luna",
+      "model": "<provider>/<balanced-model>",
       "reasoning": "preserve",
       "emoji": "🎯"
     },
     "powerful": {
       "$comment": "Expensive; reserved for genuinely difficult work and never used as a fallback.",
-      "model": "opencode-go/kimi-k3",
+      "model": "<provider>/<powerful-model>",
       "reasoning": "preserve",
       "emoji": "💎"
     }
@@ -47,7 +47,7 @@
     "maxContextTokens": 100000
   },
   "escalation": {
-    "$comment": "Borderline-band LLM escalation: when the score lands in [minScore, maxScore] and no rule resolved the turn, the fast model re-classifies the prompt as 'fast' or 'balanced' (one tiny call, maxTokens 4, temperature 0). The classifier can never select powerful, never overrides explicit rules, and any failure (timeout, error, junk answer) keeps the heuristic tier. 'model' is optional - it defaults to the route the fast tier resolves to. Note: escalated turns send a bounded recent transcript to the classifier model (the same provider family the prompt would go to anyway).",
+    "$comment": "Borderline-band LLM escalation: when the score lands in [minScore, maxScore] and no rule resolved the turn, the fast model re-classifies the prompt as 'fast' or 'balanced' (one tiny call, maxTokens 4, temperature 0). The classifier can never select powerful, never overrides explicit rules, and any failure (timeout, error, junk answer) keeps the heuristic tier. 'model' is optional - it defaults to the route the fast tier resolves to. Escalated turns send a bounded recent transcript to the classifier model (the same provider family the prompt would go to anyway).",
     "enabled": true,
     "minScore": 0.12,
     "maxScore": 0.35,
@@ -55,7 +55,7 @@
   },
   "rules": [
     {
-      "$comment": "powerful (kimi-k3) only for high-confidence, genuinely difficult work. No generic keywords like 'analyze' or 'debug'.",
+      "$comment": "Powerful route only for high-confidence, genuinely difficult work. No generic keywords like 'analyze' or 'debug'.",
       "id": "hard-architecture",
       "priority": 100,
       "match": {
@@ -119,7 +119,7 @@
     }
   ],
   "fallbacks": ["fast", "cheap-code"],
-  "$comment-fallbacks": "fallbacks intentionally exclude 'powerful' - kimi-k3 must never be reached by accident.",
+  "$comment-fallbacks": "Fallbacks intentionally exclude 'powerful' - must never be reached by accident.",
   "observability": {
     "showRouteStatus": true,
     "logDecisions": false
