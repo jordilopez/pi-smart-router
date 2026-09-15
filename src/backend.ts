@@ -105,9 +105,11 @@ export async function resolveBackend(
     );
   }
 
-  // Effective base URL: the model's own baseUrl wins, otherwise the
-  // auth-resolved baseUrl (e.g. gateway/OAuth endpoints).
-  const baseUrl = model.baseUrl || auth.baseUrl;
+  // Effective base URL: the auth-resolved baseUrl wins when present (e.g.
+  // OAuth-dynamic gateway endpoints), falling back to the model's static
+  // catalog baseUrl. This matches pi's direct-provider behavior where
+  // auth.baseUrl overrides the model URL.
+  const baseUrl = auth.baseUrl || model.baseUrl;
 
   return {
     model,
