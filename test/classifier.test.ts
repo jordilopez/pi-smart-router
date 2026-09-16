@@ -5,6 +5,7 @@ import {
   extractRawFeatures,
   getLatestUserPrompt,
   matchRule,
+  stripInjectedSkillBlocks,
 } from "../src/classifier.js";
 import { DEFAULT_CLASSIFIER_CONFIG } from "../src/types.js";
 import { makeModel, makeContext } from "./helpers.js";
@@ -37,6 +38,29 @@ describe("getLatestUserPrompt", () => {
       messages: [{ role: "user", content: [{ type: "text", text: "part1" }, { type: "text", text: "part2" }], timestamp: Date.now() }],
     });
     expect(getLatestUserPrompt(ctx)).toBe("part1\npart2");
+  });
+
+  it("strips a harness-injected skill block and keeps the real request", () => {
+    const ctx = makeContext({
+      messages: [user('<skill name="frontend-ui-engineering" location="/skills/frontend-ui-engineering/SKILL.md">\n# Frontend UI Engineering\n</skill>\n\nreal question?')],
+    });
+    expect(getLatestUserPrompt(ctx)).toBe("real question?");
+  });
+});
+
+describe("stripInjectedSkillBlocks", () => {
+  it("returns text unchanged when no injected skill block is present", () => {
+    expect(stripInjectedSkillBlocks("just a normal prompt")).toBe("just a normal prompt");
+  });
+
+  it("does not match bare <skill> listing tags without a name attribute", () => {
+    const text = "keep <skill> without name attribute </skill> intact";
+    expect(stripInjectedSkillBlocks(text)).toBe(text);
+  });
+
+  it("removes multiple injected blocks", () => {
+    const text = '<skill name="a" location="x">body A</skill>\nfirst\n<skill name="b" location="y">body B</skill>\nsecond';
+    expect(stripInjectedSkillBlocks(text)).toBe("first\n\nsecond");
   });
 });
 
@@ -227,6 +251,32 @@ describe("classifyPrompt (table-driven)", () => {
       { maxPromptTokens: 100 },
     );
     expect(raw.promptTokens).toBeLessThanOrEqual(100);
+  });
+
+  it("ignores harness-injected skill bodies when scoring the prompt", () => {
+    // Regression: Pi injects a skill's full SKILL.md as a `role: "user"`
+    // message. A code-heavy skill body used to be scored as the user prompt
+    // and pushed trivial requests into the powerful tier.
+    const injected = `<skill name="frontend-ui-engineering" location="/skills/frontend-ui-engineering/SKILL.md">
+References are relative to /skills/frontend-ui-engineering.
+
+# Frontend UI Engineering
+
+export function TaskItem({ task }) { return <li className="flex">{task.title}</li>; }
+Analyze the design system, review the component state, refactor the render function.
+
+\`\`\`tsx
+<button onClick={handleClick}>Click me</button>
+\`\`\`
+</skill>
+
+Add a button to the toolbar.`;
+
+    const withSkill = classifyPrompt(makeContext({ messages: [user(injected)] }), BASE_CONFIG);
+    const barePrompt = classifyPrompt(makeContext({ messages: [user("Add a button to the toolbar.")] }), BASE_CONFIG);
+
+    expect(withSkill.complexityScore).toBe(barePrompt.complexityScore);
+    expect(withSkill.complexityScore).toBeLessThan(0.8);
   });
 });
 

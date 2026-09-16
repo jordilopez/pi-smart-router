@@ -104,6 +104,31 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
+/**
+ * Harness-injected skill body: `<skill name="..." location="...">...</skill>`.
+ *
+ * The `name=` attribute is required so bare `<skill>` tags (e.g. the
+ * `<available_skills>` listing in the system prompt) are not matched.
+ */
+const INJECTED_SKILL_BLOCK =
+  /<skill\b[^>]*\bname\s*=\s*(?:"[^"]*"|'[^']*')[^>]*>[\s\S]*?<\/skill>/gi;
+
+/**
+ * Remove harness-injected skill bodies from message text.
+ *
+ * When a skill is invoked, Pi materializes the full SKILL.md into the
+ * conversation as a `role: "user"` message wrapped in a `<skill name="...">`
+ * block. The router treats the latest user message as "the prompt", so without
+ * this the skill body (often thousands of tokens of code samples and reasoning
+ * prose) is scored as if the user wrote it, inflating the complexity score
+ * into the powerful tier. The human request that follows the block is kept.
+ */
+export function stripInjectedSkillBlocks(text: string): string {
+  const withoutBlocks = text.replace(INJECTED_SKILL_BLOCK, "\n");
+  if (withoutBlocks === text) return text;
+  return withoutBlocks.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /** Concatenated text of a message's text blocks (empty for other roles). */
 function messageText(message: Message): string {
   if (typeof message.content === "string") return message.content;
@@ -136,7 +161,7 @@ function latestUserMessage(context: Context) {
 /** The latest user prompt as plain text (may be empty). */
 export function getLatestUserPrompt(context: Context): string {
   const msg = latestUserMessage(context);
-  return msg ? messageText(msg) : "";
+  return msg ? stripInjectedSkillBlocks(messageText(msg)) : "";
 }
 
 /** Estimate whole-context tokens: system prompt, messages, tool calls/results, images. */
@@ -144,7 +169,7 @@ export function estimateContextTokens(context: Context): number {
   let total = estimateTokens(context.systemPrompt ?? "");
 
   for (const msg of context.messages) {
-    total += estimateTokens(messageText(msg));
+    total += estimateTokens(stripInjectedSkillBlocks(messageText(msg)));
     total += messageImageCount(msg) * IMAGE_TOKEN_ESTIMATE;
 
     if (msg.role === "assistant") {
