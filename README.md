@@ -55,6 +55,8 @@ The classifier is intentionally lightweight and deterministic. It extracts signa
 - **Tool signal** - only tools beyond a typical bare Pi coding session baseline (about eight tools) raise this signal. The standard tool set is session state, not prompt difficulty, and does not consume the cheap-tier score budget.
 - **Image signal** - whether images are present. This is normally weighted at zero because image support is enforced separately by backend capability checks.
 
+**Injected skill bodies are excluded.** When a skill is invoked, Pi materializes the full `SKILL.md` into the conversation as a `role: "user"` message wrapped in a `<skill name="...">...</skill>` block. The classifier strips those blocks before scoring, so the request is judged on what the user actually wrote — not on the skill's code samples and reasoning prose. Without this, a long code-heavy skill (for example `frontend-ui-engineering`) would saturate the code and reasoning signals and force otherwise trivial requests onto the powerful tier. The stripping is applied consistently to the prompt, rule matching, and the escalation classifier.
+
 The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. With the defaults, scores up to `0.18` target cheap-code, scores through `0.35` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Cheap-code is additionally reachable at any score through explicit mechanical-task rules. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
 
 ## Install
