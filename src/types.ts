@@ -243,8 +243,9 @@ export interface RouteDecision {
   isFallback: boolean;
   explanation: string;
   /**
-   * Heuristic tier derived from the complexity score. Diagnostics only; kept so
-   * the footer/log can show what the classifier changed relative to.
+   * Heuristic tier derived from the complexity score. Diagnostics only.
+   * Populated in heuristic mode (no classifier active) to show which tier the
+   * score selected; in classifier mode the verdict determines the route.
    */
   heuristicTier?: RouteTier;
   /**

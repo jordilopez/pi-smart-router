@@ -175,10 +175,7 @@ export function formatDecisionStatus(decision: RouteDecision): string {
   if (decision.matchedRule) {
     source = `rule:${decision.matchedRule}`;
   } else if (decision.classifierVerdict) {
-    source =
-      decision.heuristicTier && decision.heuristicTier !== decision.classifierVerdict
-        ? `classifier ${decision.heuristicTier}→${decision.classifierVerdict}`
-        : "classifier";
+    source = "classifier";
   } else {
     source = decision.reason;
   }
@@ -297,21 +294,14 @@ export function streamSmartRouter(
           }
           if (verdict) {
             classifierVerdict = verdict;
-            decision = resolveRoute(
-              state.registry,
-              state.config,
-              features,
-              context,
-              verdict,
-              useHeuristicTier,
-            );
+            decision = resolveRoute(state.registry, state.config, features, context, verdict);
           }
         }
         // In heuristic mode the tier step selected the route, so the tier is
         // the reason it was chosen; in classifier mode the verdict decided.
         if (useHeuristicTier) decision.heuristicTier = heuristicTier;
         decision.classifierVerdict = classifierVerdict;
-        if (classifierVerdict && classifierStats && (classifierStats.elapsedMs !== undefined || classifierStats.inputTokens !== undefined)) {
+        if (classifierVerdict && (classifierStats.elapsedMs !== undefined || classifierStats.inputTokens !== undefined)) {
           decision.classifierStats = classifierStats;
         }
         currentRoute = decision;
