@@ -158,17 +158,15 @@ Routes are only resolved when actually selected - backends that don't exist or a
       "imageSignal": 0                // kept at 0; image support is enforced by
                                       // capability checks, not the complexity score
     },
-    "thresholds": {
+    "thresholds": {                   // used in heuristic mode (no classifier model)
       "cheapMax": 0.18,                // score <= cheapMax  -> cheap tier (cheap/cheap-code/low-cost/economy)
       "simpleMax": 0.35,               // <= simpleMax       -> fast tier (fast/simple/...)
       "mediumMax": 0.8                // <= mediumMax       -> balanced tier; above -> powerful tier
     },
     "maxPromptTokens": 4000,          // prompt analysis truncation limit
-    "maxContextTokens": 100000        // context analysis limit
-  },
-  "classifier": {                     // optional classifier (see "Classifier" below)
-    "model": "typesafe-ai/jev",      // set to enable classification; omit for heuristic-only
-    "timeoutMs": 1500
+    "maxContextTokens": 100000,       // context analysis limit
+    "model": "typesafe-ai/jev",      // optional classifier backend; omit for heuristic-only
+    "timeoutMs": 1500                 // aborts the classifier call; see "Classifier" below
   },
   "rules": [                          // optional, evaluated by priority (desc)
     {
@@ -326,22 +324,21 @@ the call is in flight.
 - `turn_start` resets the cache. A message-based heuristic (new user prompt after tool results) is kept as fallback safety.
 - The backend is never switched after the first stream event; failures after content has been emitted surface as stream errors, not fallbacks.
 
-## Adaptive routing and future upgrades
+## Future upgrades (deliberately not implemented)
 
-The router has one limited, opt-in adaptive feature: an **optional classifier** (a small LLM or TypeSafe Jev). When `classifier.model` is configured it classifies every turn and its verdict is final (any tier); explicit rules still win first. It does not retry failed work or observe answer quality. The broader router still has no success/failure feedback loop:
+The router has no success/failure feedback loop:
 
 - A backend that is unavailable or incompatible is skipped **before streaming** and the normal fallback order is used.
 - Once streaming begins, the selected backend is fixed for the turn. Backend errors are surfaced as stream errors; they are not retried on another route.
 - If a user sends a follow-up, that is a new turn and is classified from the new context. A follow-up such as “find the root cause” may naturally score higher, but that is not escalation memory.
 - A successful response is not validated by the router. It cannot tell whether a code change is correct unless the user or a later tool result makes that visible in a new request.
 
-Possible future upgrades, deliberately not enabled by the current implementation:
+Policies considered and deliberately left out:
 
 1. **Retry with escalation** - after a pre-output backend failure, retry on the next stronger route (`fast` → `balanced` → `powerful`). This needs safeguards for partial output, duplicate tool calls, cancellation, retry limits, and additional cost. Retrying after partial output is especially risky because the user may already have seen an incomplete answer.
 2. **Cross-turn escalation memory** - remember repeated backend errors, failed tests, or unsuccessful attempts and raise a session's minimum tier for subsequent turns. This would need explicit reset/decay rules so one transient failure does not make every later prompt expensive.
 3. **Signal-based escalation** - promote when a turn reaches a configurable number of tool calls, repeated tool errors, a context-compaction event, or another observable difficulty signal. Tool-call continuations would need a clear policy for whether the current turn can switch models or only the next turn can.
-4. **Fast-LLM pre-classification** - *now available* by setting `classifier.model` to an LLM or TypeSafe Jev ref (see above). It adds latency/cost and sends prompt/context data to an additional model; on failure the router uses `defaultRoute`, and recursive `pi-smart-router/*` refs are rejected at config load.
-5. **Model-aware routing** - have either local rules or an optional classifier evaluate “is this task suitable for model X?” rather than only assigning a generic complexity score. Capability checks would still remain authoritative for context windows, images, reasoning, and output limits.
+4. **Model-aware routing** - have either local rules or the classifier evaluate “is this task suitable for model X?” rather than only assigning a generic complexity score. Capability checks would still remain authoritative for context windows, images, reasoning, and output limits.
 
 Until one of these policies is implemented, users should treat the route status as the backend selected **before** the turn starts, not as a live assessment of how well the task is progressing.
 
