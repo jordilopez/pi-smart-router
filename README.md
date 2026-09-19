@@ -227,11 +227,11 @@ thresholds apply as before.
 - **Backends** (`classifier.model`):
   - A `typesafe-ai/...` ref (e.g. `typesafe-ai/jev`) is served by the
     `@typesafe-ai/sdk` directly — a fast System One **Choice** judgment over
-    `cheap`/`fast`/`balanced`/`powerful`. This requires `TYPESAFE_API_KEY`;
-    install/authenticate with the `pi-typesafe` extension (`/typesafe login`,
-    `/typesafe enable`). **Without the key the classifier is treated as
-    unavailable and the heuristic thresholds apply instead** (the router does
-    not fall back to `defaultRoute` for a missing key).
+    `cheap`/`fast`/`balanced`/`powerful`. **This requires `TYPESAFE_API_KEY` in
+    the environment** (see [TypeSafe Jev setup](#typesafe-jev-setup)). Without
+    it the classifier is treated as unavailable and the heuristic thresholds
+    apply instead (the router does not fall back to `defaultRoute` for a
+    missing key).
   - Any other `provider/modelId` is called as a one-shot LLM
     (`maxTokens: 4`, `temperature: 0`).
 - **What happens:** the classifier sees a bounded recent transcript (≤ ~2000
@@ -241,8 +241,8 @@ thresholds apply as before.
 - **Unavailable backend is not a failure:** a `typesafe-ai/*` classifier with no
   `TYPESAFE_API_KEY` is detected up front and routes through the heuristic
   tiers, exactly as if no classifier were configured (no per-turn call, no
-  timeout). Adding the key mid-session (e.g. `/typesafe login`) takes effect on
-  the next turn.
+  timeout). The key is read from the process environment, so export it before
+  starting Pi; changing it requires a restart.
 - **Failure is not guessed:** timeout (`timeoutMs`, default 1500), auth/stream
   error, or an unparseable answer mean the router skips the tier step and uses
   `defaultRoute` (then the fallbacks chain) — never a heuristic tier.
@@ -259,6 +259,62 @@ thresholds apply as before.
   }
 }
 ```
+
+### Why route with Jev
+
+The score thresholds are fast, free, and blind to meaning — semantically equal
+prompts land on opposite sides of a boundary ("could you review my changes?"
+vs. "analyze this diff"). Jev is a judgment model, not a chat model:
+
+- **Semantic tier choice.** It reads a bounded transcript plus the user request
+  and returns one of `cheap`/`fast`/`balanced`/`powerful` with a probability —
+  fixing boundary misrouting that keywords cannot.
+- **Sub-second and cheap.** One System One Choice call per new turn, no
+  multi-step reasoning; tool-call continuations reuse the cached decision.
+- **Verdict is final, any tier.** Unlike the old band heuristic it may promote
+  *or* demote, including to `powerful` — which is otherwise hard to reach.
+- **Bounded context.** The classifier sees the four-tier rubric, a ~2000-token
+  recent transcript, and the heuristic's own signals; the transcript is
+  untrusted input and is never allowed to be the whole program.
+- **Fail-safe.** Missing key → heuristic thresholds; timeout/error/unparseable
+  answer → `defaultRoute`; explicit rules always win first; the router can
+  never classify itself into a loop (`pi-smart-router/*` is rejected).
+
+Data note: each classified turn sends the bounded transcript (not the full
+conversation, not files) to TypeSafe, and usage is billed to your TypeSafe
+account. Omit `classifier.model` to stay fully local.
+
+### TypeSafe Jev setup
+
+1. Create a key at [console.typesafe.ai](https://console.typesafe.ai) and export
+   it **in the environment that runs Pi** (do not paste it into config files):
+
+   ```sh
+   export TYPESAFE_API_KEY="..."   # ~/.zshrc / ~/.bashrc, or a launcher
+   ```
+
+2. Configure the router to use it (global `~/.pi/agent/pi-smart-router.json` or a
+   trusted project `.pi/pi-smart-router.json`):
+
+   ```jsonc
+   { "classifier": { "model": "typesafe-ai/jev", "timeoutMs": 1500 } }
+   ```
+
+3. Start Pi and confirm the classifier ran: the footer shows
+   `… · classifier` (plus `· <ms>/<in>i/<out>o` once the backend reports
+   stats), and the route log line carries `classifier=<tier>`. If you instead
+   see `threshold` in the footer, the router did not find a usable key and fell
+   back to heuristics.
+
+> **`/typesafe login` is not enough for the router.** The
+> [`pi-typesafe`](https://github.com/DevMortimer/pi-typesafe) extension (`pi
+> install npm:pi-typesafe`) stores its key in `~/.pi/agent/pi-typesafe/auth.json`
+> and is only needed for its own `typesafe_evaluate` tool. The router always
+> reads `TYPESAFE_API_KEY` from the environment. Set both if you want the tool
+> *and* Jev routing.
+
+Optional: `timeoutMs` bounds the call (default 1500). On timeout the router uses
+`defaultRoute` (`balanced` by default) rather than guessing a tier.
 
 The route log line includes `classifier=<verdict>` for classifier-decided turns
 (or `classifier=-`); the footer status briefly shows `router: classifying…` while
