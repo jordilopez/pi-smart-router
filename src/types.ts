@@ -66,6 +66,22 @@ export interface EscalationConfig {
 export type EscalationVerdict = "fast" | "balanced";
 
 /** Score thresholds for automatic (threshold-based) route selection. */
+
+export type RouteTier = "cheap" | "fast" | "balanced" | "powerful";
+
+/**
+ * Shared tier rubric used to build both the TypeSafe Choice criteria and the
+ * LLM classifier prompt. Keeping it in one place prevents the two classifier
+ * backends from drifting apart.
+ */
+export const TIER_RUBRIC: Record<RouteTier, string> = {
+  cheap: "trivial mechanical work: rename, formatting, boilerplate, typo, simple scaffold; no judgement needed",
+  fast: "simple work: factual question, small lookup, small talk, or a trivial one-line edit",
+  balanced: "context-aware judgement or multi-step work: code review, analysis, debugging, design discussion",
+  powerful:
+    "genuinely hard work: system architecture, security threat modelling, complex debugging, formal reasoning, cross-cutting refactor",
+};
+
 export interface ClassifierThresholds {
   /** Maximum complexity score routed to the "cheap" tier (0-1). Default 0.18 */
   cheapMax?: number;
