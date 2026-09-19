@@ -5,7 +5,9 @@ import {
   extractRawFeatures,
   getLatestUserPrompt,
   matchRule,
+  messageTranscriptText,
   stripInjectedSkillBlocks,
+  replaceSkillBlocksWithMarkers,
 } from "../src/classifier.js";
 import { DEFAULT_CLASSIFIER_CONFIG } from "../src/types.js";
 import { makeModel, makeContext } from "./helpers.js";
@@ -61,6 +63,42 @@ describe("stripInjectedSkillBlocks", () => {
   it("removes multiple injected blocks", () => {
     const text = '<skill name="a" location="x">body A</skill>\nfirst\n<skill name="b" location="y">body B</skill>\nsecond';
     expect(stripInjectedSkillBlocks(text)).toBe("first\n\nsecond");
+  });
+});
+
+describe("replaceSkillBlocksWithMarkers", () => {
+  it("returns text unchanged when no injected skill block is present", () => {
+    expect(replaceSkillBlocksWithMarkers("just a normal prompt")).toBe("just a normal prompt");
+  });
+
+  it("replaces a double-quoted skill block with an invocation marker", () => {
+    const text = '<skill name="frontend-ui-engineering" location="x"># long body</skill>\nreal question?';
+    expect(replaceSkillBlocksWithMarkers(text)).toBe("[skill invoked: frontend-ui-engineering]\nreal question?");
+  });
+
+  it("replaces a single-quoted skill block with an invocation marker", () => {
+    const text = "<skill name='some-skill'>body</skill>";
+    expect(replaceSkillBlocksWithMarkers(text)).toBe("[skill invoked: some-skill]");
+  });
+
+  it("does not match bare <skill> listing tags without a name attribute", () => {
+    const text = "keep <skill> without name attribute </skill> intact";
+    expect(replaceSkillBlocksWithMarkers(text)).toBe(text);
+  });
+});
+
+describe("messageTranscriptText", () => {
+  it("replaces injected skill blocks with invocation markers and keeps other placeholders", () => {
+    const msg: Message = {
+      role: "user",
+      timestamp: Date.now(),
+      content: [
+        { type: "text", text: '<skill name="code-review">huge skill body</skill>' },
+        { type: "image", mimeType: "image/png", data: "" } as never,
+        { type: "text", text: "please review this" },
+      ],
+    };
+    expect(messageTranscriptText(msg)).toBe("[skill invoked: code-review]\n[image omitted]\nplease review this");
   });
 });
 

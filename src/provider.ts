@@ -19,11 +19,12 @@ import type {
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { buildStreamOptions, createDelegationModel, delegateToBackend, resolveBackend } from "./backend.js";
 import { classifyPrompt } from "./classifier.js";
-import { resolveEscalationConfig, runEscalation, shouldEscalate } from "./escalation.js";
+import { isClassifierAvailable, runClassifier } from "./classifier-orchestrator.js";
 import { debugLog } from "./log.js";
 import { classifierThresholds, resolveRoute, tierForScore } from "./route-resolver.js";
 import { ROUTE_EMOJI, RouterError } from "./types.js";
-import type { PromptFeatures, RouteDecision, RouterModelRegistry, SmartRouterConfig } from "./types.js";
+import type { ClassifierStats } from "./typesafe-client.js";
+import type { PromptFeatures, RouteDecision, RouterModelRegistry, RouteTier, SmartRouterConfig } from "./types.js";
 
 // ============================================================================
 // Router state (module-level; lifecycle managed from index.ts)
@@ -156,6 +157,41 @@ function applyReasoning(streamOptions: SimpleStreamOptions, routeConfig: RouteDe
   // be forced portably across providers, "preserve" keeps the session level.
 }
 
+/**
+ * Format the footer status line for a routing decision.
+ *
+ * Shape: `<glyph> <route> · <backendModel> · <source>[ · <elapsed>ms/<in>i/<out>o]`,
+ * where source is `rule:<id>` for matched rules, `classifier[ <from>→<to>]` when
+ * the classifier ran, or the resolver reason otherwise. When the classifier ran
+ * and reported stats, its cost is appended. Never includes prompt text.
+ *
+ * The heuristic complexity score is deliberately omitted: when a classifier is
+ * configured it does not select the route, so showing it next to `classifier` is
+ * misleading. The score remains in the log line for diagnostics.
+ */
+export function formatDecisionStatus(decision: RouteDecision): string {
+  const glyph = decision.routeConfig.emoji ?? ROUTE_EMOJI[decision.route] ?? "↳";
+  let source: string;
+  if (decision.matchedRule) {
+    source = `rule:${decision.matchedRule}`;
+  } else if (decision.classifierVerdict) {
+    source = "classifier";
+  } else {
+    source = decision.reason;
+  }
+  let stats = "";
+  const cs = decision.classifierStats;
+  if (cs) {
+    const parts: string[] = [];
+    if (cs.elapsedMs !== undefined) parts.push(`${cs.elapsedMs}ms`);
+    if (cs.inputTokens !== undefined || cs.outputTokens !== undefined) {
+      parts.push(`${cs.inputTokens ?? "?"}i/${cs.outputTokens ?? "?"}o`);
+    }
+    if (parts.length > 0) stats = ` · ${parts.join("/")}`;
+  }
+  return `${glyph} ${decision.route} · ${decision.backendModel} · ${source}${stats}`;
+}
+
 /** Build the error AssistantMessage pushed on stream failure. */
 function makeErrorMessage(model: Model<Api>, message: string): AssistantMessage {
   return {
@@ -212,40 +248,62 @@ export function streamSmartRouter(
       invalidateRouteIfNewPrompt(context);
       if (!currentRoute) {
         const features: PromptFeatures = classifyPrompt(context, state.config.classifier ?? {});
-        let decision = resolveRoute(state.registry, state.config, features, context);
+        // When a usable classifier is configured it decides the tier; the
+        // heuristic score never selects it, and a transient classifier failure
+        // falls through to defaultRoute/fallbacks. Rules still win first. With
+        // no classifier configured -- or a configured classifier whose backend
+        // is unavailable (e.g. a typesafe-ai ref with no TYPESAFE_API_KEY) --
+        // the heuristic thresholds apply instead.
+        const classifierActive = isClassifierAvailable(state.config, state.registry);
+        const useHeuristicTier = !classifierActive;
+        let decision = resolveRoute(
+          state.registry,
+          state.config,
+          features,
+          context,
+          undefined,
+          useHeuristicTier,
+        );
 
-        // Borderline-band LLM escalation: only for threshold decisions (rules,
-        // defaults, and fallbacks are never second-guessed), only inside the
-        // configured band, and only once per turn (the route cache below).
-        // The classifier can only return "fast" or "balanced"; null keeps the
-        // heuristic tier. state must be re-checked after the await:
-        // session_shutdown may have cleared it while the call was in flight.
-        let escalatedFromTier: string | undefined;
-        let escalationVerdict: string | undefined;
-        const esc = resolveEscalationConfig(state.config);
-        if (decision.reason === "threshold" && shouldEscalate(features, esc)) {
-          state.setStatus?.(STATUS_KEY, "router: escalating…");
-          const verdict = await runEscalation(
+        // Classifier: rules are never second-guessed, but any
+        // threshold/default/fallback decision may be replaced by the
+        // classifier's verdict. When configured, the classifier runs on every
+        // new turn and its verdict is final (any tier). Failure (timeout,
+        // unavailable backend, unparseable answer) falls through to
+        // defaultRoute/fallbacks. Runs once per turn (the route cache below).
+        // `state` must be re-checked after the await: session_shutdown may have
+        // cleared it while the call was in flight.
+        const heuristicTier = tierForScore(features.complexityScore, classifierThresholds(state.config));
+        let classifierVerdict: RouteTier | undefined;
+        const classifierStats: ClassifierStats = {};
+        if (classifierActive && decision.reason !== "rule") {
+          state.setStatus?.(STATUS_KEY, "router: classifying…");
+          const verdict = await runClassifier(
             state.registry,
             state.config,
             features,
             context,
             state.sessionId,
+            classifierStats,
           );
           if (!state || !state.registry) {
             throw new RouterError(
               "REGISTRY_UNAVAILABLE",
-              "Smart Router shut down while escalating",
+              "Smart Router shut down while classifying",
             );
           }
-          const heuristicTier = tierForScore(features.complexityScore, classifierThresholds(state.config));
-          if (verdict && verdict !== heuristicTier) {
-            escalatedFromTier = heuristicTier;
-            escalationVerdict = verdict;
+          if (verdict) {
+            classifierVerdict = verdict;
             decision = resolveRoute(state.registry, state.config, features, context, verdict);
           }
         }
-        decision.escalatedFromTier = escalatedFromTier;
+        // In heuristic mode the tier step selected the route, so the tier is
+        // the reason it was chosen; in classifier mode the verdict decided.
+        if (useHeuristicTier) decision.heuristicTier = heuristicTier;
+        decision.classifierVerdict = classifierVerdict;
+        if (classifierVerdict && (classifierStats.elapsedMs !== undefined || classifierStats.inputTokens !== undefined)) {
+          decision.classifierStats = classifierStats;
+        }
         currentRoute = decision;
         cachedUserMessageCount = context.messages.filter((m) => m.role === "user").length;
 
@@ -257,7 +315,14 @@ export function streamSmartRouter(
         const baseLine =
           `route=${decision.route} backend=${decision.backendModel} ` +
           `score=${features.complexityScore.toFixed(2)} turn=${state.turnNumber}` +
-          ` esc=${escalatedFromTier && escalationVerdict ? `${escalatedFromTier}->${escalationVerdict}` : "-"}` +
+          ` classifier=${decision.classifierVerdict ?? "-"}` +
+          (decision.classifierStats?.elapsedMs !== undefined
+            ? ` classifyMs=${decision.classifierStats.elapsedMs}` +
+              (decision.classifierStats.inputTokens !== undefined
+                ? ` classifyTok=${decision.classifierStats.inputTokens}i/${decision.classifierStats.outputTokens ?? 0}o`
+                : "")
+            : "") +
+          `${decision.heuristicTier ? ` heuristic=${decision.heuristicTier}` : ""}` +
           ` session=${state.sessionId ? state.sessionId.slice(0, 8) : "-"}`;
         const observability = state.config.observability;
         if (observability?.logDecisions) {
@@ -272,12 +337,10 @@ export function streamSmartRouter(
 
         // UI visibility: footer status only. Runs only on first
         // classification of the turn (never on tool continuations), and
-        // never includes raw prompt text.
-        const glyph = decision.routeConfig.emoji ?? ROUTE_EMOJI[decision.route] ?? "↳";
-        state.setStatus?.(
-          STATUS_KEY,
-          `${glyph} ${decision.route} · ${decision.backendModel} (${features.complexityScore.toFixed(2)})`,
-        );
+        // never includes raw prompt text. The reason and any classifier
+        // verdict are included so the last decision is visible without
+        // reading the log file.
+        state.setStatus?.(STATUS_KEY, formatDecisionStatus(decision));
       }
 
       const decision = currentRoute;

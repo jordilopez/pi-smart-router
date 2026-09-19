@@ -6,25 +6,25 @@
     "fast": {
       "model": "<provider>/<fast-model>",
       "reasoning": "preserve",
-      "emoji": "⚡"
+      "emoji": "\u26a1"
     },
     "cheap-code": {
       "$comment": "Cheap hosted code model (not local).",
       "model": "<provider>/<cheap-model>",
       "reasoning": "preserve",
-      "emoji": "🪙"
+      "emoji": "\ud83e\ude99"
     },
     "balanced": {
       "$comment": "Exact lowercase model ID.",
       "model": "<provider>/<balanced-model>",
       "reasoning": "preserve",
-      "emoji": "🎯"
+      "emoji": "\ud83c\udfaf"
     },
     "powerful": {
       "$comment": "Expensive; reserved for genuinely difficult work and never used as a fallback.",
       "model": "<provider>/<powerful-model>",
       "reasoning": "preserve",
-      "emoji": "💎"
+      "emoji": "\ud83d\udc8e"
     }
   },
   "classifier": {
@@ -44,13 +44,9 @@
       "mediumMax": 0.8
     },
     "maxPromptTokens": 4000,
-    "maxContextTokens": 100000
-  },
-  "escalation": {
-    "$comment": "Borderline-band LLM escalation: when the score lands in [minScore, maxScore] and no rule resolved the turn, the fast model re-classifies the prompt as 'fast' or 'balanced' (one tiny call, maxTokens 4, temperature 0). The classifier can never select powerful, never overrides explicit rules, and any failure (timeout, error, junk answer) keeps the heuristic tier. 'model' is optional - it defaults to the route the fast tier resolves to. Escalated turns send a bounded recent transcript to the classifier model (the same provider family the prompt would go to anyway).",
-    "enabled": true,
-    "minScore": 0.12,
-    "maxScore": 0.35,
+    "maxContextTokens": 100000,
+    "model": "typesafe-ai/jev",
+    "$comment-model": "Optional classifier backend. A typesafe-ai/... ref needs TYPESAFE_API_KEY; without it the router uses the heuristic thresholds above. Any other provider/modelId is called as a one-shot LLM.",
     "timeoutMs": 1500
   },
   "rules": [
@@ -59,7 +55,12 @@
       "id": "hard-architecture",
       "priority": 100,
       "match": {
-        "anyKeywords": ["system design", "architecture review", "design the architecture", "scalability plan"]
+        "anyKeywords": [
+          "system design",
+          "architecture review",
+          "design the architecture",
+          "scalability plan"
+        ]
       },
       "route": "powerful"
     },
@@ -67,7 +68,12 @@
       "id": "hard-debugging",
       "priority": 100,
       "match": {
-        "anyKeywords": ["root cause", "race condition", "deadlock", "heisenbug"]
+        "anyKeywords": [
+          "root cause",
+          "race condition",
+          "deadlock",
+          "heisenbug"
+        ]
       },
       "route": "powerful"
     },
@@ -75,7 +81,12 @@
       "id": "hard-security",
       "priority": 100,
       "match": {
-        "anyKeywords": ["security vulnerability", "privilege escalation", "injection vulnerability", "threat model"]
+        "anyKeywords": [
+          "security vulnerability",
+          "privilege escalation",
+          "injection vulnerability",
+          "threat model"
+        ]
       },
       "route": "powerful"
     },
@@ -83,7 +94,11 @@
       "id": "hard-performance",
       "priority": 100,
       "match": {
-        "anyKeywords": ["performance bottleneck", "profiling shows", "allocation churn"]
+        "anyKeywords": [
+          "performance bottleneck",
+          "profiling shows",
+          "allocation churn"
+        ]
       },
       "route": "powerful"
     },
@@ -91,7 +106,14 @@
       "id": "hard-reasoning",
       "priority": 100,
       "match": {
-        "anyKeywords": ["formal proof", "prove that", "correctness proof", "complexity analysis", "cross-cutting refactor", "rewrite the codebase"]
+        "anyKeywords": [
+          "formal proof",
+          "prove that",
+          "correctness proof",
+          "complexity analysis",
+          "cross-cutting refactor",
+          "rewrite the codebase"
+        ]
       },
       "route": "powerful"
     },
@@ -100,7 +122,9 @@
       "id": "review-tasks",
       "priority": 10,
       "match": {
-        "anyKeywords": ["review"]
+        "anyKeywords": [
+          "review"
+        ]
       },
       "route": "balanced"
     },
@@ -110,15 +134,27 @@
       "priority": 10,
       "match": {
         "anyKeywords": [
-          "rename", "formatting", "format", "imports", "boilerplate",
-          "simple CRUD", "test scaffold", "typo", "spelling", "add a comment",
-          "lint", "prettier"
+          "rename",
+          "formatting",
+          "format",
+          "imports",
+          "boilerplate",
+          "simple CRUD",
+          "test scaffold",
+          "typo",
+          "spelling",
+          "add a comment",
+          "lint",
+          "prettier"
         ]
       },
       "route": "cheap-code"
     }
   ],
-  "fallbacks": ["fast", "cheap-code"],
+  "fallbacks": [
+    "fast",
+    "cheap-code"
+  ],
   "$comment-fallbacks": "Fallbacks intentionally exclude 'powerful' - must never be reached by accident.",
   "observability": {
     "showRouteStatus": true,

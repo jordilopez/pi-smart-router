@@ -142,6 +142,31 @@ describe("validateConfig semantics", () => {
     expect(() => validateConfig(cfg, "test")).not.toThrow();
   });
 
+  it("rejects emoji containing newline control characters", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "bad\n" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow(/control/);
+  });
+
+  it("rejects emoji containing ANSI escape sequences", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "\u001b[31m" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow(/control/);
+  });
+
+  it("rejects empty emoji", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "" } } };
+    expect(() => validateConfig(cfg, "test")).toThrow();
+  });
+
+  it("emoji with a valid glyph passes", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "🎯" } } };
+    expect(() => validateConfig(cfg, "test")).not.toThrow();
+  });
+
+  it("emoji without control characters passes", () => {
+    const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "↳" } } };
+    expect(() => validateConfig(cfg, "test")).not.toThrow();
+  });
+
   it("ZWJ emoji sequences pass validation", () => {
     const cfg = { ...base, routes: { balanced: { model: "anthropic/claude-sonnet-4-5", emoji: "👩‍💻" } } };
     expect(() => validateConfig(cfg, "test")).not.toThrow();
@@ -209,7 +234,7 @@ describe("path helpers", () => {
   });
 });
 
-describe("escalation config", () => {
+describe("classifier config", () => {
   const base = {
     version: 1,
     defaultRoute: "balanced",
@@ -219,57 +244,40 @@ describe("escalation config", () => {
     },
   };
 
-  it("accepts a full escalation block", () => {
+  it("accepts a classifier model and timeout", () => {
     const cfg = validateConfig(
-      { ...base, escalation: { enabled: true, minScore: 0.2, maxScore: 0.45, model: "openai/gpt-4o-mini", timeoutMs: 1500 } },
+      { ...base, classifier: { model: "openai/gpt-4o-mini", timeoutMs: 1500 } },
       "test",
     );
-    expect(cfg.escalation?.enabled).toBe(true);
-    expect(cfg.escalation?.model).toBe("openai/gpt-4o-mini");
+    expect(cfg.classifier?.model).toBe("openai/gpt-4o-mini");
+    expect(cfg.classifier?.timeoutMs).toBe(1500);
   });
 
-  it("accepts a partial escalation block (defaults merged at runtime)", () => {
-    const cfg = validateConfig({ ...base, escalation: { enabled: true } }, "test");
-    expect(cfg.escalation?.enabled).toBe(true);
-    expect(cfg.escalation?.minScore).toBeUndefined();
+  it("accepts an empty classifier block (defaults merged at runtime)", () => {
+    const cfg = validateConfig({ ...base, classifier: {} }, "test");
+    expect(cfg.classifier?.model).toBeUndefined();
   });
 
-  it("accepts configs without an escalation block", () => {
+  it("accepts configs without a classifier block", () => {
     const cfg = validateConfig({ ...base }, "test");
-    expect(cfg.escalation).toBeUndefined();
-  });
-
-  it("rejects minScore > maxScore", () => {
-    expect(() =>
-      validateConfig({ ...base, escalation: { minScore: 0.5, maxScore: 0.4 } }, "test"),
-    ).toThrow(/minScore/);
-  });
-
-  it("validates the effective band after defaults are merged", () => {
-    // minScore 0.8 alone would combine with the default maxScore 0.45 into an
-    // impossible, never-firing band - rejected instead of silently disabled.
-    expect(() => validateConfig({ ...base, escalation: { minScore: 0.8 } }, "test")).toThrow(/empty/);
-    // maxScore below the default minScore is equally impossible.
-    expect(() => validateConfig({ ...base, escalation: { maxScore: 0.1 } }, "test")).toThrow(/empty/);
-    // A valid partial band still passes.
-    expect(() => validateConfig({ ...base, escalation: { maxScore: 0.35 } }, "test")).not.toThrow();
+    expect(cfg.classifier).toBeUndefined();
   });
 
   it("rejects malformed classifier model refs", () => {
-    expect(() => validateConfig({ ...base, escalation: { model: "no-slash" } }, "test")).toThrow(/provider\/modelId/);
+    expect(() => validateConfig({ ...base, classifier: { model: "no-slash" } }, "test")).toThrow(/provider\/modelId/);
   });
 
   it("rejects the router itself as the classifier model (recursive routing)", () => {
     expect(() =>
-      validateConfig({ ...base, escalation: { model: "pi-smart-router/auto" } }, "test"),
+      validateConfig({ ...base, classifier: { model: "pi-smart-router/auto" } }, "test"),
     ).toThrow(/recursive/i);
     expect(() =>
-      validateConfig({ ...base, escalation: { model: "PI-SMART-ROUTER/AUTO" } }, "test"),
+      validateConfig({ ...base, classifier: { model: "PI-SMART-ROUTER/AUTO" } }, "test"),
     ).toThrow(/recursive/i);
   });
 
   it("rejects non-positive timeouts", () => {
-    expect(() => validateConfig({ ...base, escalation: { timeoutMs: 0 } }, "test")).toThrow();
-    expect(() => validateConfig({ ...base, escalation: { timeoutMs: -5 } }, "test")).toThrow();
+    expect(() => validateConfig({ ...base, classifier: { timeoutMs: 0 } }, "test")).toThrow();
+    expect(() => validateConfig({ ...base, classifier: { timeoutMs: -5 } }, "test")).toThrow();
   });
 });
