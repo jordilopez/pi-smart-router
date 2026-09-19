@@ -55,7 +55,9 @@ The classifier is intentionally lightweight and deterministic. It extracts signa
 - **Tool signal** - only tools beyond a typical bare Pi coding session baseline (about eight tools) raise this signal. The standard tool set is session state, not prompt difficulty, and does not consume the cheap-tier score budget.
 - **Image signal** - whether images are present. This is normally weighted at zero because image support is enforced separately by backend capability checks.
 
-**Injected skill bodies are excluded.** When a skill is invoked, Pi materializes the full `SKILL.md` into the conversation as a `role: "user"` message wrapped in a `<skill name="...">...</skill>` block. The classifier strips those blocks before scoring, so the request is judged on what the user actually wrote — not on the skill's code samples and reasoning prose. Without this, a long code-heavy skill (for example `frontend-ui-engineering`) would saturate the code and reasoning signals and force otherwise trivial requests onto the powerful tier. The stripping is applied consistently to the prompt, rule matching, and the classifier.
+**Injected skill bodies are excluded.** When a skill is invoked, Pi materializes the full `SKILL.md` into the conversation as a `role: "user"` message wrapped in a `<skill name="...">...</skill>` block. The classifier strips those blocks before scoring, so the request is judged on what the user actually wrote — not on the skill's code samples and reasoning prose. Without this, a long code-heavy skill (for example `frontend-ui-engineering`) would saturate the code and reasoning signals and force otherwise trivial requests onto the powerful tier. The stripping is applied consistently to the prompt, rule matching, and the heuristic score.
+
+When a configured classifier (TypeSafe Jev or an LLM) builds its bounded transcript, the skill body is likewise removed — but replaced with a one-line `[skill invoked: <name>]` marker (mirroring `[image omitted]` / `[tool call: ...]`), so the classifier still knows a skill was invoked without the body eating its per-message character budget.
 
 The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. With the defaults, scores up to `0.18` target cheap-code, scores through `0.35` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Cheap-code is additionally reachable at any score through explicit mechanical-task rules. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
 
@@ -218,11 +220,11 @@ For each new turn (re-classified only on `turn_start`):
 
 The heuristic classifier is fast, free, and blind to meaning — prompts near a
 tier boundary can land on the wrong side. When a classifier is configured
-(`escalation.model`), it classifies **every** new turn instead: the heuristic
+(`classifier.model`), it classifies **every** new turn instead: the heuristic
 score does not select the tier. Without a configured model, the heuristic
 thresholds apply as before.
 
-- **Backends** (`escalation.model`):
+- **Backends** (`classifier.model`):
   - A `typesafe-ai/...` ref (e.g. `typesafe-ai/jev`) is served by the
     `@typesafe-ai/sdk` directly — a fast System One **Choice** judgment over
     `cheap`/`fast`/`balanced`/`powerful`. This requires `TYPESAFE_API_KEY`;
@@ -263,7 +265,7 @@ the call is in flight.
 
 ## Adaptive routing and future upgrades
 
-The router has one limited, opt-in adaptive feature: an **optional classifier** (a small LLM or TypeSafe Jev). When `escalation.model` is configured it classifies every turn and its verdict is final (any tier); explicit rules still win first. It does not retry failed work or observe answer quality. The broader router still has no success/failure feedback loop:
+The router has one limited, opt-in adaptive feature: an **optional classifier** (a small LLM or TypeSafe Jev). When `classifier.model` is configured it classifies every turn and its verdict is final (any tier); explicit rules still win first. It does not retry failed work or observe answer quality. The broader router still has no success/failure feedback loop:
 
 - A backend that is unavailable or incompatible is skipped **before streaming** and the normal fallback order is used.
 - Once streaming begins, the selected backend is fixed for the turn. Backend errors are surfaced as stream errors; they are not retried on another route.
@@ -275,7 +277,7 @@ Possible future upgrades, deliberately not enabled by the current implementation
 1. **Retry with escalation** - after a pre-output backend failure, retry on the next stronger route (`fast` → `balanced` → `powerful`). This needs safeguards for partial output, duplicate tool calls, cancellation, retry limits, and additional cost. Retrying after partial output is especially risky because the user may already have seen an incomplete answer.
 2. **Cross-turn escalation memory** - remember repeated backend errors, failed tests, or unsuccessful attempts and raise a session's minimum tier for subsequent turns. This would need explicit reset/decay rules so one transient failure does not make every later prompt expensive.
 3. **Signal-based escalation** - promote when a turn reaches a configurable number of tool calls, repeated tool errors, a context-compaction event, or another observable difficulty signal. Tool-call continuations would need a clear policy for whether the current turn can switch models or only the next turn can.
-4. **Fast-LLM pre-classification** - *now available* by setting `escalation.model` to an LLM or TypeSafe Jev ref (see above). It adds latency/cost and sends prompt/context data to an additional model; on failure the router uses `defaultRoute`, and recursive `pi-smart-router/*` refs are rejected at config load.
+4. **Fast-LLM pre-classification** - *now available* by setting `classifier.model` to an LLM or TypeSafe Jev ref (see above). It adds latency/cost and sends prompt/context data to an additional model; on failure the router uses `defaultRoute`, and recursive `pi-smart-router/*` refs are rejected at config load.
 5. **Model-aware routing** - have either local rules or an optional classifier evaluate “is this task suitable for model X?” rather than only assigning a generic complexity score. Capability checks would still remain authoritative for context windows, images, reasoning, and output limits.
 
 Until one of these policies is implemented, users should treat the route status as the backend selected **before** the turn starts, not as a live assessment of how well the task is progressing.
@@ -338,7 +340,7 @@ pi -e ./src/index.ts --model pi-smart-router/auto
 
 - Routing is **per turn, not per tool call**: tool-call continuations keep the turn's route even if the intermediate prompt looks different.
 - Token counts are **heuristics** (`chars/4`, images ≈ 512 tokens); treat thresholds as approximate.
-- Classification is local heuristics by default (keywords/patterns) with no semantic understanding; configuring `escalation.model` adds a semantic judgment via an LLM or TypeSafe Jev. The `fast` route is an execution backend, not a classifier or judge.
+- Classification is local heuristics by default (keywords/patterns) with no semantic understanding; configuring `classifier.model` adds a semantic judgment via an LLM or TypeSafe Jev. The `fast` route is an execution backend, not a classifier or judge.
 - Routing does not currently evaluate answer quality, test outcomes, tool-loop length, or whether a task is “succeeding” after it starts.
 - `reasoning: "off"` cannot force-disable thinking on providers that always think; it only avoids requesting reasoning. `preserve` keeps the session's thinking level.
 - Backend availability is evaluated when the decision is made; a backend that dies mid-turn surfaces as a stream error (no mid-turn failover).

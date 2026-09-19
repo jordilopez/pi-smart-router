@@ -111,7 +111,7 @@ export function estimateTokens(text: string): number {
  * `<available_skills>` listing in the system prompt) are not matched.
  */
 const INJECTED_SKILL_BLOCK =
-  /<skill\b[^>]*\bname\s*=\s*(?:"[^"]*"|'[^']*')[^>]*>[\s\S]*?<\/skill>/gi;
+  /<skill\b[^>]*\bname\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>[\s\S]*?<\/skill>/gi;
 
 /**
  * Remove harness-injected skill bodies from message text.
@@ -127,6 +127,23 @@ export function stripInjectedSkillBlocks(text: string): string {
   const withoutBlocks = text.replace(INJECTED_SKILL_BLOCK, "\n");
   if (withoutBlocks === text) return text;
   return withoutBlocks.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Replace harness-injected skill bodies with a one-line invocation marker.
+ *
+ * Used for the classifier transcript (TypeSafe / LLM): the body must not reach
+ * the classifier (it would eat the tiny per-message char budget and bias the
+ * verdict), but "the user just invoked this skill" is itself a useful routing
+ * signal, so the skill name is kept. Mirrors the `[image omitted]` /
+ * `[tool call: ...]` placeholder style.
+ */
+export function replaceSkillBlocksWithMarkers(text: string): string {
+  return text.replace(
+    INJECTED_SKILL_BLOCK,
+    (_match, doubleQuoted: string | undefined, singleQuoted: string | undefined) =>
+      `[skill invoked: ${doubleQuoted ?? singleQuoted ?? "unknown"}]`,
+  );
 }
 
 /** Concatenated text of a message's text blocks (empty for other roles). */
@@ -333,7 +350,7 @@ export function messageTranscriptText(message: Context["messages"][number]): str
   if (typeof message.content === "string") return message.content;
   const parts: string[] = [];
   for (const block of message.content) {
-    if (block.type === "text") parts.push(block.text);
+    if (block.type === "text") parts.push(replaceSkillBlocksWithMarkers(block.text));
     else if (block.type === "image") parts.push("[image omitted]");
     else if (block.type === "thinking") continue;
     else if (block.type === "toolCall") parts.push(`[tool call: ${block.name}]`);
@@ -373,10 +390,6 @@ export function buildTranscript(context: Context): {
     latestPrompt: truncate(getLatestUserPrompt(context), CLASSIFIER_MAX_PROMPT_CHARS).trim() || "(empty)",
   };
 }
-
-// ============================================================================
-// Rule matching
-// ============================================================================
 
 /** Case-insensitive whole-phrase keyword test (keywords are regex-escaped). */
 export function keywordMatches(text: string, keyword: string): boolean {
