@@ -19,7 +19,7 @@
 import type { Api, Context, Model } from "@earendil-works/pi-ai";
 import { getLatestUserPrompt, matchRule } from "./classifier.js";
 import { RouterError } from "./types.js";
-import type { PromptFeatures, RouteConfig, RouteDecision, RouterModelRegistry, SmartRouterConfig } from "./types.js";
+import type { PromptFeatures, RouteConfig, RouteDecision, RouterModelRegistry, RouteTier, SmartRouterConfig } from "./types.js";
 
 // ============================================================================
 // Capability checks
@@ -188,17 +188,17 @@ export function findRouteByTier(
 /**
  * Resolve the route for a classified prompt. Throws RouterError when nothing is available.
  *
- * `tierOverride` (from LLM escalation) replaces the score-computed tier at the
- * threshold step only; explicit rules still win first, and overrides of the
- * cheap/powerful tiers are impossible by type (a cheap classifier must never
- * select the expensive backend).
+ * `tierOverride` (the classifier's verdict) replaces the score-computed tier
+ * at the threshold step only; explicit rules still win first. Any tier may be
+ * supplied; when the classifier is configured its verdict is final.
  */
 export function resolveRoute(
   registry: RouterModelRegistry,
   config: SmartRouterConfig,
   features: PromptFeatures,
   context: Context,
-  tierOverride?: "fast" | "balanced",
+  tierOverride?: RouteTier,
+  useHeuristicTier = true,
 ): RouteDecision {
   const promptText = getLatestUserPrompt(context);
   const score = features.complexityScore;
@@ -223,27 +223,32 @@ export function resolveRoute(
     }
   }
 
-  // 2. Score thresholds: cheap -> fast -> balanced -> powerful. Configs that
-  //    omit cheapMax get the built-in default (0.18). An escalation override
-  //    replaces the computed tier (never below fast / above balanced by type).
+  // 2. Tier step. `tierOverride` is the classifier's verdict. When
+  //    useHeuristicTier is false (classifier-primary mode) the score-derived
+  //    tier is skipped entirely: without a verdict the resolver falls straight
+  //    through to defaultRoute/fallbacks, so the heuristic never classifies.
   const thresholds = classifierThresholds(config);
   const computedTier = tierForScore(score, thresholds);
-  const tier = tierOverride ?? computedTier;
+  const tier = tierOverride ?? (useHeuristicTier ? computedTier : undefined);
 
-  const thresholdRouteName = findRouteByTier(config, tier) ?? config.defaultRoute;
-  const thresholdRouteConfig = config.routes[thresholdRouteName];
-  if (thresholdRouteConfig && isRouteAvailable(registry, thresholdRouteName, thresholdRouteConfig, features)) {
-    return {
-      route: thresholdRouteName,
-      backendModel: thresholdRouteConfig.model,
-      routeConfig: thresholdRouteConfig,
-      reason: "threshold",
-      complexityScore: score,
-      isFallback: false,
-      explanation: tierOverride
-        ? `Complexity ${score.toFixed(2)} (heuristic tier ${computedTier}) escalated to ${tierOverride} via llm-escalation -> route '${thresholdRouteName}'`
-        : `Complexity ${score.toFixed(2)} (${tier} tier) -> route '${thresholdRouteName}'`,
-    };
+  if (tier) {
+    const thresholdRouteName = findRouteByTier(config, tier) ?? config.defaultRoute;
+    const thresholdRouteConfig = config.routes[thresholdRouteName];
+    if (thresholdRouteConfig && isRouteAvailable(registry, thresholdRouteName, thresholdRouteConfig, features)) {
+      return {
+        route: thresholdRouteName,
+        backendModel: thresholdRouteConfig.model,
+        routeConfig: thresholdRouteConfig,
+        reason: "threshold",
+        complexityScore: score,
+        isFallback: false,
+        explanation: tierOverride
+          ? useHeuristicTier
+            ? `Complexity ${score.toFixed(2)} (heuristic tier ${computedTier}) overridden to ${tierOverride} by the classifier -> route '${thresholdRouteName}'`
+            : `Classifier verdict ${tierOverride} -> route '${thresholdRouteName}'`
+          : `Complexity ${score.toFixed(2)} (${tier} tier) -> route '${thresholdRouteName}'`,
+      };
+    }
   }
 
   const tryRoute = (

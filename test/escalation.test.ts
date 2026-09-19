@@ -4,22 +4,16 @@ import {
   buildClassifierContext,
   classifyWithLlm,
   isClassifierBackendAvailable,
+  isClassifierConfigured,
   isRouterSelfRef,
   parseVerdict,
   resolveClassifierModelRef,
-  resolveEscalationConfig,
-  runEscalation,
-  shouldEscalate,
+  resolveClassifierConfig,
+  runClassifier,
 } from "../src/escalation.js";
-import { DEFAULT_ESCALATION_CONFIG } from "../src/types.js";
-import type {
-  EscalationVerdict,
-  PromptFeatures,
-  ResolvedBackend,
-  SmartRouterConfig,
-} from "../src/types.js";
+import { DEFAULT_CLASSIFIER_CONFIG } from "../src/types.js";
+import type { PromptFeatures, ResolvedBackend, SmartRouterConfig } from "../src/types.js";
 import { FakeRegistry, captureOf, makeContext, makeFakeProvider, makeModel } from "./helpers.js";
-import type { Context } from "@earendil-works/pi-ai";
 
 function features(overrides: Partial<PromptFeatures> = {}): PromptFeatures {
   return {
@@ -87,45 +81,35 @@ function backendWithAnswer(answer: string | "error" | "hang"): ResolvedBackend {
 }
 
 // ============================================================================
-// resolveEscalationConfig / shouldEscalate
+// resolveClassifierConfig / isClassifierConfigured
 // ============================================================================
 
-describe("resolveEscalationConfig", () => {
+describe("resolveClassifierConfig", () => {
   it("returns built-in defaults when the block is absent", () => {
-    expect(resolveEscalationConfig(config())).toEqual(DEFAULT_ESCALATION_CONFIG);
+    expect(resolveClassifierConfig(config())).toEqual(DEFAULT_CLASSIFIER_CONFIG);
   });
 
   it("merges partial config field-by-field over the defaults", () => {
-    const merged = resolveEscalationConfig(config({ escalation: { enabled: true } }));
-    expect(merged.enabled).toBe(true);
-    expect(merged.minScore).toBe(DEFAULT_ESCALATION_CONFIG.minScore);
-    expect(merged.maxScore).toBe(DEFAULT_ESCALATION_CONFIG.maxScore);
-    expect(merged.timeoutMs).toBe(DEFAULT_ESCALATION_CONFIG.timeoutMs);
-    expect(merged.model).toBe("");
+    const merged = resolveClassifierConfig(config({ classifier: { model: "openai/gpt-4o-mini" } }));
+    expect(merged.model).toBe("openai/gpt-4o-mini");
+    expect(merged.timeoutMs).toBe(DEFAULT_CLASSIFIER_CONFIG.timeoutMs);
   });
 });
 
-describe("shouldEscalate", () => {
-  const esc = resolveEscalationConfig(config({ escalation: { enabled: true } }));
-  const off = resolveEscalationConfig(config());
-
-  it("is false when disabled", () => {
-    expect(shouldEscalate(features(), off)).toBe(false);
+describe("isClassifierConfigured", () => {
+  it("is false when no model is configured", () => {
+    expect(isClassifierConfigured(config())).toBe(false);
+    expect(isClassifierConfigured(config({ classifier: {} }))).toBe(false);
+    expect(isClassifierConfigured(config({ classifier: { model: "" } }))).toBe(false);
   });
 
-  it("is true inside the band", () => {
-    expect(shouldEscalate(features({ complexityScore: 0.15 }), esc)).toBe(true);
-    expect(shouldEscalate(features({ complexityScore: 0.3 }), esc)).toBe(true);
-    expect(shouldEscalate(features({ complexityScore: 0.35 }), esc)).toBe(true);
+  it("is true when a model is configured", () => {
+    expect(isClassifierConfigured(config({ classifier: { model: "openai/gpt-4o-mini" } }))).toBe(true);
+    expect(isClassifierConfigured(config({ classifier: { model: "typesafe-ai/jev" } }))).toBe(true);
   });
 
-  it("is false outside the band", () => {
-    expect(shouldEscalate(features({ complexityScore: 0.11 }), esc)).toBe(false);
-    expect(shouldEscalate(features({ complexityScore: 0.36 }), esc)).toBe(false);
-  });
-
-  it("is false for image prompts", () => {
-    expect(shouldEscalate(features({ hasImages: true }), esc)).toBe(false);
+  it("is false for a router self-reference", () => {
+    expect(isClassifierConfigured(config({ classifier: { model: "pi-smart-router/auto" } }))).toBe(false);
   });
 });
 
@@ -140,18 +124,18 @@ describe("isRouterSelfRef / resolveClassifierModelRef", () => {
     expect(isRouterSelfRef("opencode-go/deepseek-v4-flash")).toBe(false);
   });
 
-  it("defaults to the fast-tier route model", () => {
-    expect(resolveClassifierModelRef(config(), resolveEscalationConfig(config()))).toBe("openai/gpt-4o-mini");
+  it("returns null when no model is configured", () => {
+    expect(resolveClassifierModelRef(config(), resolveClassifierConfig(config()))).toBeNull();
   });
 
   it("uses the configured model when set", () => {
-    const cfg = config({ escalation: { model: "opencode-go/mimo-v2.5" } });
-    expect(resolveClassifierModelRef(cfg, resolveEscalationConfig(cfg))).toBe("opencode-go/mimo-v2.5");
+    const cfg = config({ classifier: { model: "opencode-go/mimo-v2.5" } });
+    expect(resolveClassifierModelRef(cfg, resolveClassifierConfig(cfg))).toBe("opencode-go/mimo-v2.5");
   });
 
   it("returns null for a self-referencing configured model", () => {
-    const cfg = config({ escalation: { model: "pi-smart-router/auto" } });
-    expect(resolveClassifierModelRef(cfg, resolveEscalationConfig(cfg))).toBeNull();
+    const cfg = config({ classifier: { model: "pi-smart-router/auto" } });
+    expect(resolveClassifierModelRef(cfg, resolveClassifierConfig(cfg))).toBeNull();
   });
 });
 
@@ -161,6 +145,10 @@ describe("isClassifierBackendAvailable", () => {
     expect(isClassifierBackendAvailable(registry, "openai/gpt-4o-mini")).toBe(true);
   });
 
+  it("accepts TypeSafe refs without a Pi provider", () => {
+    expect(isClassifierBackendAvailable(new FakeRegistry({}), "typesafe-ai/jev")).toBe(true);
+  });
+
   it("rejects unknown models, unauthenticated providers, malformed refs, and self-refs", () => {
     const registry = new FakeRegistry({
       models: [makeModel({ provider: "openai", id: "gpt-4o-mini" })],
@@ -168,7 +156,7 @@ describe("isClassifierBackendAvailable", () => {
       missingProviders: ["ghost"],
     });
     expect(isClassifierBackendAvailable(registry, "openai/does-not-exist")).toBe(false);
-    expect(isClassifierBackendAvailable(new FakeRegistry({ models: [makeModel({ provider: "openai", id: "gpt-4o-mini" })] }), "openai/gpt-4o-mini") ).toBe(true);
+    expect(isClassifierBackendAvailable(new FakeRegistry({ models: [makeModel({ provider: "openai", id: "gpt-4o-mini" })] }), "openai/gpt-4o-mini")).toBe(true);
     expect(isClassifierBackendAvailable(registry, "openai/gpt-4o-mini")).toBe(false);
     expect(isClassifierBackendAvailable(registry, "ghost/gpt")).toBe(false);
     expect(isClassifierBackendAvailable(registry, "no-slash")).toBe(false);
@@ -196,7 +184,11 @@ describe("buildClassifierContext", () => {
     expect(text).toContain("here is the code");
     expect(text).toContain("review this");
     expect(text).toContain("<latest>");
-    expect(classifier.systemPrompt).toContain("balanced");
+    // All four tiers are offered.
+    expect(classifier.systemPrompt).toContain('"cheap"');
+    expect(classifier.systemPrompt).toContain('"fast"');
+    expect(classifier.systemPrompt).toContain('"balanced"');
+    expect(classifier.systemPrompt).toContain('"powerful"');
   });
 
   it("classifies the latest USER message, not the last message", () => {
@@ -247,6 +239,8 @@ describe("parseVerdict", () => {
     expect(parseVerdict("fast")).toBe("fast");
     expect(parseVerdict(" balanced ")).toBe("balanced");
     expect(parseVerdict("Fast.")).toBe("fast");
+    expect(parseVerdict("cheap")).toBe("cheap");
+    expect(parseVerdict("powerful")).toBe("powerful");
   });
 
   it("accepts short prefix prose but not ambiguity", () => {
@@ -313,12 +307,12 @@ describe("classifyWithLlm", () => {
 });
 
 // ============================================================================
-// runEscalation (orchestrator)
+// runClassifier (orchestrator)
 // ============================================================================
 
-describe("runEscalation", () => {
-  it("end-to-end: in-band prompt + working classifier refines the tier", async () => {
-    const cfg = config({ escalation: { enabled: true, model: "openai/gpt-4o-mini" } });
+describe("runClassifier", () => {
+  it("end-to-end: a configured classifier returns a tier verdict", async () => {
+    const cfg = config({ classifier: { model: "openai/gpt-4o-mini" } });
     const provider = makeFakeProvider({
       streamFactory: () => {
         const stream = createAssistantMessageEventStream();
@@ -332,20 +326,19 @@ describe("runEscalation", () => {
     });
     (registry as unknown as { getProvider: () => unknown }).getProvider = () => provider;
 
-    const verdict = await runEscalation(registry, cfg, features({ complexityScore: 0.25 }), makeContext(), "pi-abc");
+    const verdict = await runClassifier(registry, cfg, features(), makeContext(), "pi-abc");
     expect(verdict).toBe("balanced");
   });
 
-  it("returns null when disabled, out of band, or the backend is unavailable", async () => {
+  it("returns null when no classifier is configured", async () => {
+    const registry = new FakeRegistry({ models: [makeModel({ provider: "openai", id: "gpt-4o-mini" })] });
+    expect(await runClassifier(registry, config(), features(), makeContext())).toBeNull();
+  });
+
+  it("returns null when the configured backend is unavailable", async () => {
     const emptyRegistry = new FakeRegistry({});
     expect(
-      await runEscalation(emptyRegistry, config(), features(), makeContext()),
-    ).toBeNull();
-    expect(
-      await runEscalation(emptyRegistry, config({ escalation: { enabled: true, model: "openai/gpt-4o-mini" } }), features({ complexityScore: 0.9 }), makeContext()),
-    ).toBeNull();
-    expect(
-      await runEscalation(emptyRegistry, config({ escalation: { enabled: true, model: "openai/gpt-4o-mini" } }), features(), makeContext()),
+      await runClassifier(emptyRegistry, config({ classifier: { model: "openai/gpt-4o-mini" } }), features(), makeContext()),
     ).toBeNull();
   });
 });

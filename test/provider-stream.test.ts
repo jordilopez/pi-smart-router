@@ -554,36 +554,30 @@ describe("route decision reuse", () => {
 });
 
 // ============================================================================
-// Borderline-band LLM escalation
+// Classifier (configured backend)
 // ============================================================================
 
-describe("borderline-band LLM escalation", () => {
-  // Score for IN_BAND_PROMPT is ~0.20 with the default classifier weights:
-  // inside the test band [0.15, 0.5] and between cheapMax (0.18) and
-  // simpleMax (0.35), so the heuristic tier is fast and the classifier's
-  // verdict can promote it.
-  const IN_BAND_PROMPT = "Could you review my changes?";
-  const ESC_CONFIG: SmartRouterConfig = {
+describe("classifier (configured backend)", () => {
+  const REVIEW_PROMPT = "Could you review my changes?"; // heuristic fast tier
+  const SIMPLE_PROMPT = "hi"; // heuristic cheap tier
+  const CLASSIFIER_CONFIG: SmartRouterConfig = {
     ...CONFIG,
-    escalation: { enabled: true, minScore: 0.15, maxScore: 0.5, timeoutMs: 60 },
+    classifier: { model: "openai/gpt-4o-mini", timeoutMs: 60 },
   };
   const RULE_CONFIG: SmartRouterConfig = {
-    ...ESC_CONFIG,
+    ...CLASSIFIER_CONFIG,
     rules: [{ id: "review", priority: 10, match: { anyKeywords: ["review"] }, route: "balanced" }],
   };
 
   const statusCalls: Array<[string, string | undefined]> = [];
   const setStatus = (key: string, text: string | undefined) => void statusCalls.push([key, text]);
 
-  function classifierThenBackend(verdict: string | null): void {
+  function setup(verdict: string | null, config: SmartRouterConfig = CLASSIFIER_CONFIG): void {
     provider = makeFakeProvider({
       streamFactory: (callIndex) => {
         const stream = createAssistantMessageEventStream();
         if (callIndex === 0 && verdict !== null) {
-          if (verdict === "hang") {
-            // Never ends: the escalation timeout must break the wait.
-            return stream;
-          }
+          if (verdict === "hang") return stream; // never ends: the timeout must break the wait
           stream.push({
             type: "text_delta",
             contentIndex: 0,
@@ -607,76 +601,73 @@ describe("borderline-band LLM escalation", () => {
     });
     (registry as any).getProvider = () => provider;
     statusCalls.length = 0;
-    setRouterStateForTesting({
-      config: ESC_CONFIG,
-      registry,
-      turnNumber: 1,
-      sessionId: "pi-session-abc",
-      setStatus,
-    });
+    setRouterStateForTesting({ config, registry, turnNumber: 1, sessionId: "pi-session-abc", setStatus });
   }
 
   function lastStatus(): string | undefined {
     return statusCalls[statusCalls.length - 1]?.[1];
   }
 
-  it("in-band prompt + verdict 'balanced' routes to balanced via the classifier", async () => {
-    classifierThenBackend("balanced");
-    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
-    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+  function prompt(text: string): Context {
+    return makeContext({ messages: [{ role: "user", content: text, timestamp: 1 }] });
+  }
 
-    // Two provider calls: classifier first, then the chosen backend.
+  it("sends the prompt to the classifier, then routes to the verdict tier", async () => {
+    setup("balanced");
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, prompt(SIMPLE_PROMPT)));
     const cap = captureOf(provider);
-    expect(cap.calls).toBe(2);
-    expect(cap.models[0].id).toBe("gpt-4o-mini"); // fast-tier classifier default
+    expect(cap.calls).toBe(2); // classifier + backend
+    expect(cap.models[0].id).toBe("gpt-4o-mini"); // configured classifier
     expect(cap.models[1].id).toBe("claude-sonnet-4-5"); // balanced backend
-    expect(lastStatus()).toContain("balanced");
+    const status = lastStatus() ?? "";
+    expect(status).toContain("· classifier");
+    // The heuristic tier never appears in the status.
+    expect(status).not.toContain("cheap→");
   });
 
-  it("classifier timeout keeps the heuristic tier", async () => {
-    classifierThenBackend("hang");
+  it("classifier verdict is final: powerful is honored even when the heuristic is cheap", async () => {
+    setup("powerful");
     const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
-    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+    await drain(streamSmartRouter(routerModel, prompt(SIMPLE_PROMPT)));
+    expect(captureOf(provider).models[1].id).toBe("claude-opus-4-5");
+    expect(lastStatus()).toContain("· classifier");
+  });
 
+  it("classifier timeout routes to defaultRoute, never the heuristic tier", async () => {
+    setup("hang");
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, prompt(SIMPLE_PROMPT)));
     const cap = captureOf(provider);
-    expect(cap.calls).toBe(2); // classifier attempt + backend
-    expect(cap.models[1].id).toBe("gpt-4o-mini"); // heuristic fast tier
-    expect(lastStatus()).toContain("fast");
+    // "hi" would heuristically score cheap -> cheap-code; the classifier path must not use that.
+    expect(cap.models[1].id).toBe("claude-sonnet-4-5"); // defaultRoute: balanced
+    expect(cap.models[1].id).not.toBe("mimo-v2.5");
+    const status = lastStatus() ?? "";
+    expect(status).toContain("· default");
+    expect(status).not.toContain("classifier");
   });
 
-  it("unparseable classifier output keeps the heuristic tier", async () => {
-    classifierThenBackend("I cannot classify this");
+  it("unparseable classifier output routes to defaultRoute", async () => {
+    setup("I cannot classify this");
     const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
-    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
-    expect(captureOf(provider).models[1].id).toBe("gpt-4o-mini");
-  });
-
-  it("out-of-band prompts never trigger a classifier call", async () => {
-    classifierThenBackend("balanced");
-    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
-    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: "hi", timestamp: 1 }] })));
-    const cap = captureOf(provider);
-    expect(cap.calls).toBe(1); // backend only
+    await drain(streamSmartRouter(routerModel, prompt(REVIEW_PROMPT)));
+    // review would heuristically be fast -> gpt-4o-mini; defaultRoute is balanced.
+    expect(captureOf(provider).models[1].id).toBe("claude-sonnet-4-5");
   });
 
   it("rule-matched turns never trigger a classifier call", async () => {
-    classifierThenBackend("balanced");
-    (registry as any).getProvider = () => provider;
-    setRouterStateForTesting({
-      config: RULE_CONFIG,
-      registry,
-      turnNumber: 1,
-      sessionId: "pi-session-abc",
-      setStatus,
-    });
+    setup("balanced", RULE_CONFIG);
     const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
-    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
+    await drain(streamSmartRouter(routerModel, prompt(REVIEW_PROMPT)));
     const cap = captureOf(provider);
     expect(cap.calls).toBe(1); // backend only (rule -> balanced)
     expect(cap.models[0].id).toBe("claude-sonnet-4-5");
+    const status = lastStatus() ?? "";
+    expect(status).toContain("· rule:review");
+    expect(status).not.toContain("classifier");
   });
 
-  it("escalation is skipped entirely when disabled", async () => {
+  it("with no classifier configured the heuristic tier routes the turn", async () => {
     provider = fullSequenceProvider();
     registry = new FakeRegistry({
       models: [
@@ -687,9 +678,15 @@ describe("borderline-band LLM escalation", () => {
       ],
     });
     (registry as any).getProvider = () => provider;
-    setRouterStateForTesting({ config: { ...CONFIG, escalation: { enabled: false } }, registry, turnNumber: 1 });
+    statusCalls.length = 0;
+    setRouterStateForTesting({ config: CONFIG, registry, turnNumber: 1, sessionId: "pi-session-abc", setStatus });
     const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
-    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: IN_BAND_PROMPT, timestamp: 1 }] })));
-    expect(captureOf(provider).calls).toBe(1);
+    await drain(streamSmartRouter(routerModel, prompt(SIMPLE_PROMPT)));
+    const cap = captureOf(provider);
+    expect(cap.calls).toBe(1); // no classifier call
+    expect(cap.models[0].id).toBe("mimo-v2.5"); // heuristic cheap tier
+    const status = lastStatus() ?? "";
+    expect(status).not.toContain("classifier");
+    expect(status).toContain("threshold");
   });
 });

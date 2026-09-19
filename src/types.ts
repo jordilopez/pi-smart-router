@@ -7,6 +7,7 @@
  */
 
 import type { Api, Context, Model, Provider, ProviderHeaders, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { ClassifierStats } from "./typesafe-client.js";
 
 // ============================================================================
 // Configuration types
@@ -39,34 +40,31 @@ export interface ClassifierWeights {
 }
 
 /**
- * Borderline-band LLM escalation config. When the heuristic complexity score
- * falls inside [minScore, maxScore] and no explicit rule resolved the turn, a
- * cheap LLM classifier re-classifies the prompt as "fast" or "balanced".
- * "powerful" is deliberately not an escalation target: a cheap classifier must
- * never be able to select the expensive backend.
+ * Classifier config. When `model` is set, that backend classifies every new turn;
+ * when unset, the heuristic complexity score selects the tier. Field groups:
+ * - `weights`/`thresholds`/`maxPromptTokens`/`maxContextTokens`: heuristic analysis
+ * - `model`/`timeoutMs`: optional classifier backend (LLM or TypeSafe Jev)
  */
-export interface EscalationConfig {
-  /** Master switch. Default false (opt-in). */
-  enabled?: boolean;
-  /** Lower bound of the borderline complexity-score band. Default 0.12 */
-  minScore?: number;
-  /** Upper bound of the borderline complexity-score band. Default 0.35 */
-  maxScore?: number;
+export interface ClassifierConfig {
+  /** Heuristic weight configuration for complexity scoring. */
+  weights?: ClassifierWeights;
+  /** Score thresholds for automatic (threshold-based) route selection. */
+  thresholds?: ClassifierThresholds;
+  /** Analysis/truncation limit for the latest user prompt, in estimated tokens. Default 4000 */
+  maxPromptTokens?: number;
+  /** Analysis limit for whole-context tokens. Default 100000 */
+  maxContextTokens?: number;
   /**
-   * Classifier backend as "provider/modelId". Optional: defaults to the model
-   * of the route the "fast" tier resolves to. Must never be the router itself
-   * ("pi-smart-router/*") - rejected at config validation and guarded at runtime.
+   * Classifier backend as "provider/modelId". Required to enable classification.
+   * A "typesafe-ai/..." ref (e.g. typesafe-ai/jev) is served by the
+   * @typesafe-ai/sdk directly. Must never reference the router itself.
    */
   model?: string;
-  /** Abort the classification call after this many ms; heuristic tier wins. Default 1500 */
+  /** Abort the classification call after this many ms; failure routes to defaultRoute. Default 1500 */
   timeoutMs?: number;
 }
 
-/** Escalation tiers the LLM classifier may return. */
-export type EscalationVerdict = "fast" | "balanced";
-
-/** Score thresholds for automatic (threshold-based) route selection. */
-
+/** Routing tiers in ascending capability/cost order. */
 export type RouteTier = "cheap" | "fast" | "balanced" | "powerful";
 
 /**
@@ -82,6 +80,7 @@ export const TIER_RUBRIC: Record<RouteTier, string> = {
     "genuinely hard work: system architecture, security threat modelling, complex debugging, formal reasoning, cross-cutting refactor",
 };
 
+/** Score thresholds for automatic (threshold-based) route selection. */
 export interface ClassifierThresholds {
   /** Maximum complexity score routed to the "cheap" tier (0-1). Default 0.18 */
   cheapMax?: number;
@@ -89,16 +88,6 @@ export interface ClassifierThresholds {
   simpleMax?: number;
   /** Maximum complexity score routed to the "balanced" tier (0-1). Default 0.80 */
   mediumMax?: number;
-}
-
-/** Classifier configuration for prompt analysis. */
-export interface ClassifierConfig {
-  weights?: ClassifierWeights;
-  thresholds?: ClassifierThresholds;
-  /** Analysis/truncation limit for the latest user prompt, in estimated tokens. Default 4000 */
-  maxPromptTokens?: number;
-  /** Analysis limit for whole-context tokens. Default 100000 */
-  maxContextTokens?: number;
 }
 
 /** Explicit keyword/feature-based routing rule. */
@@ -146,8 +135,6 @@ export interface SmartRouterConfig {
   /** Named routes; a route is only resolved when actually selected. */
   routes: Record<string, RouteConfig>;
   classifier?: ClassifierConfig;
-  /** Borderline-band LLM escalation (opt-in). */
-  escalation?: EscalationConfig;
   /** Explicit routing rules, evaluated by descending priority */
   rules?: RoutingRule[];
   /** Ordered fallback route names tried after defaultRoute */
@@ -155,7 +142,7 @@ export interface SmartRouterConfig {
   observability?: ObservabilityConfig;
 }
 
-/** Fully-resolved classifier defaults. */
+/** Fully-resolved classifier defaults (heuristic weights + optional backend). */
 export const DEFAULT_CLASSIFIER_CONFIG: Required<ClassifierConfig> = {
   weights: {
     promptTokens: 0.1,
@@ -179,19 +166,6 @@ export const DEFAULT_CLASSIFIER_CONFIG: Required<ClassifierConfig> = {
   },
   maxPromptTokens: 4000,
   maxContextTokens: 100000,
-};
-
-/**
- * Built-in escalation defaults. `model: ""` means "derive from the fast tier
- * route". Partial user config is merged over these (unlike the top-level
- * config files, nested objects merge field-by-field).
- */
-export const DEFAULT_ESCALATION_CONFIG: Required<EscalationConfig> = {
-  enabled: false,
-  // The band is shifted down because the tool baseline is no longer counted
-  // as prompt complexity.
-  minScore: 0.12,
-  maxScore: 0.35,
   model: "",
   timeoutMs: 1500,
 };
@@ -269,10 +243,20 @@ export interface RouteDecision {
   isFallback: boolean;
   explanation: string;
   /**
-   * Heuristic tier the escalation started from, when an LLM classifier verdict
-   * changed the tier (diagnostics only - no behavior attached).
+   * Heuristic tier derived from the complexity score. Diagnostics only; kept so
+   * the footer/log can show what the classifier changed relative to.
    */
-  escalatedFromTier?: string;
+  heuristicTier?: RouteTier;
+  /**
+   * Tier returned by the classifier (LLM or TypeSafe) when it ran. Diagnostics/
+   * status only - routing behavior is baked into `route`/`routeConfig`.
+   */
+  classifierVerdict?: RouteTier;
+  /**
+   * Duration/token usage of the classification call (when it ran and the
+   * backend reported them). Diagnostics/status only - shown in the footer.
+   */
+  classifierStats?: ClassifierStats;
 }
 
 // ============================================================================

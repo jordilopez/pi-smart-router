@@ -336,7 +336,7 @@ describe("resolveRoute: escalation tier override", () => {
     const decision = resolveRoute(overrideRegistry(), config(), features({ complexityScore: 0.25 }), ctx, "balanced");
     expect(decision.reason).toBe("threshold");
     expect(decision.route).toBe("balanced");
-    expect(decision.explanation).toContain("escalated");
+    expect(decision.explanation).toContain("overridden");
     expect(decision.explanation).toContain("fast");
   });
 
@@ -386,5 +386,48 @@ describe("resolveRoute: escalation tier override", () => {
     const custom = classifierThresholds(config({ classifier: { thresholds: { mediumMax: 0.65 } } }));
     expect(custom.mediumMax).toBe(0.65);
     expect(tierForScore(0.7, custom)).toBe("powerful");
+  });
+});
+
+describe("resolveRoute: classifier-primary mode (heuristic tier skipped)", () => {
+  const registry = () =>
+    new FakeRegistry({
+      models: [
+        makeModel({ provider: "openai", id: "gpt-4o-mini" }),
+        makeModel({ provider: "opencode-go", id: "mimo-v2.5" }),
+        makeModel({ provider: "anthropic", id: "claude-sonnet-4-5" }),
+        makeModel({ provider: "anthropic", id: "claude-opus-4-5" }),
+      ],
+    });
+
+  it("without a verdict, skips the heuristic tier and uses defaultRoute", () => {
+    // Score 0.05 would heuristically be cheap-code; classifier-primary mode ignores it.
+    const decision = resolveRoute(registry(), config(), features({ complexityScore: 0.05 }), ctx, undefined, false);
+    expect(decision.route).toBe("balanced"); // defaultRoute
+    expect(decision.reason).toBe("default");
+  });
+
+  it("a verdict selects the tier even with a low heuristic score", () => {
+    const decision = resolveRoute(registry(), config(), features({ complexityScore: 0.05 }), ctx, "powerful", false);
+    expect(decision.route).toBe("powerful");
+    expect(decision.reason).toBe("threshold");
+    expect(decision.explanation).toContain("Classifier verdict powerful");
+    expect(decision.explanation).not.toContain("heuristic");
+  });
+
+  it("rules still win over the classifier path", () => {
+    const withRule = config({
+      rules: [{ id: "hard", priority: 100, match: { anyKeywords: ["root cause"] }, route: "powerful" }],
+    });
+    const decision = resolveRoute(
+      registry(),
+      withRule,
+      features({ complexityScore: 0.05 }),
+      makeContext({ messages: [{ role: "user", content: "find the root cause", timestamp: 1 }] }),
+      undefined,
+      false,
+    );
+    expect(decision.route).toBe("powerful");
+    expect(decision.reason).toBe("rule");
   });
 });
