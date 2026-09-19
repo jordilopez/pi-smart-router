@@ -229,13 +229,20 @@ thresholds apply as before.
     `@typesafe-ai/sdk` directly — a fast System One **Choice** judgment over
     `cheap`/`fast`/`balanced`/`powerful`. This requires `TYPESAFE_API_KEY`;
     install/authenticate with the `pi-typesafe` extension (`/typesafe login`,
-    `/typesafe enable`).
+    `/typesafe enable`). **Without the key the classifier is treated as
+    unavailable and the heuristic thresholds apply instead** (the router does
+    not fall back to `defaultRoute` for a missing key).
   - Any other `provider/modelId` is called as a one-shot LLM
     (`maxTokens: 4`, `temperature: 0`).
 - **What happens:** the classifier sees a bounded recent transcript (≤ ~2000
   tokens) plus the heuristic's own signals and returns a tier. The verdict
   determines the route (it may promote *or* demote, including to `powerful`).
 - **Rules win first:** explicit rules are never second-guessed.
+- **Unavailable backend is not a failure:** a `typesafe-ai/*` classifier with no
+  `TYPESAFE_API_KEY` is detected up front and routes through the heuristic
+  tiers, exactly as if no classifier were configured (no per-turn call, no
+  timeout). Adding the key mid-session (e.g. `/typesafe login`) takes effect on
+  the next turn.
 - **Failure is not guessed:** timeout (`timeoutMs`, default 1500), auth/stream
   error, or an unparseable answer mean the router skips the tier step and uses
   `defaultRoute` (then the fallbacks chain) — never a heuristic tier.

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { buildStreamOptions } from "../src/backend.js";
 import { STATUS_KEY } from "../src/provider.js";
@@ -686,6 +686,44 @@ describe("classifier (configured backend)", () => {
     expect(cap.calls).toBe(1); // no classifier call
     expect(cap.models[0].id).toBe("mimo-v2.5"); // heuristic cheap tier
     const status = lastStatus() ?? "";
+    expect(status).not.toContain("classifier");
+    expect(status).toContain("threshold");
+  });
+});
+
+describe("classifier fallback: typesafe ref without TYPESAFE_API_KEY", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("uses the heuristic tier and never calls the classifier", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "");
+    const statusCalls: Array<[string, string | undefined]> = [];
+    const setStatus = (k: string, t: string | undefined) => void statusCalls.push([k, t]);
+    provider = fullSequenceProvider();
+    registry = new FakeRegistry({
+      models: [
+        makeModel({ provider: "anthropic", id: "claude-sonnet-4-5" }),
+        makeModel({ provider: "openai", id: "gpt-4o-mini" }),
+        makeModel({ provider: "opencode-go", id: "mimo-v2.5" }),
+        makeModel({ provider: "anthropic", id: "claude-opus-4-5", maxTokens: 8192 }),
+      ],
+    });
+    (registry as any).getProvider = () => provider;
+    setRouterStateForTesting({
+      config: {
+        ...CONFIG,
+        classifier: { model: "typesafe-ai/jev", timeoutMs: 60 },
+      },
+      registry,
+      turnNumber: 1,
+      sessionId: "pi-session-abc",
+      setStatus,
+    });
+    const routerModel = makeModel({ provider: "pi-smart-router", id: "auto" });
+    await drain(streamSmartRouter(routerModel, makeContext({ messages: [{ role: "user", content: "hi", timestamp: 1 }] })));
+    const cap = captureOf(provider);
+    expect(cap.calls).toBe(1); // no classifier call
+    expect(cap.models[0].id).toBe("mimo-v2.5"); // heuristic cheap tier
+    const status = statusCalls.at(-1)?.[1] ?? "";
     expect(status).not.toContain("classifier");
     expect(status).toContain("threshold");
   });

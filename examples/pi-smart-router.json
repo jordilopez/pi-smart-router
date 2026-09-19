@@ -46,6 +46,7 @@
     "maxPromptTokens": 4000,
     "maxContextTokens": 100000,
     "model": "typesafe-ai/jev",
+    "$comment-model": "Optional classifier backend. A typesafe-ai/... ref needs TYPESAFE_API_KEY; without it the router uses the heuristic thresholds above. Any other provider/modelId is called as a one-shot LLM.",
     "timeoutMs": 1500
   },
   "rules": [

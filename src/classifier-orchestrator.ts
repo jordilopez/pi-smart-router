@@ -6,16 +6,19 @@
  * first. When no model is configured, the router falls back to the heuristic
  * score and this module is never called.
  *
- * Failure philosophy: classification is best-effort. Timeout, unavailable
- * backend, stream error, or an unparseable answer all yield `null`; the caller
- * then routes through defaultRoute/fallbacks (never a heuristic guess).
+ * Failure philosophy: classification is best-effort. A configured classifier
+ * whose backend is unavailable up front (a `typesafe-ai/*` ref with no
+ * TYPESAFE_API_KEY) is treated as if no classifier were configured: the caller
+ * uses the heuristic score tiers. Transient failures (timeout, stream error,
+ * unparseable answer) yield `null`; the caller then routes through
+ * defaultRoute/fallbacks (never a heuristic guess).
  */
 
 import type { Api, AssistantMessageEvent, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { buildStreamOptions, createDelegationModel, parseModelRef, resolveBackend } from "./backend.js";
 import { buildTranscript, estimateTokens } from "./classifier.js";
 import { DEFAULT_CLASSIFIER_CONFIG, TIER_RUBRIC } from "./types.js";
-import { typesafeEscalate } from "./typesafe-client.js";
+import { typesafeClassify } from "./typesafe-client.js";
 import type { ClassifierStats } from "./typesafe-client.js";
 import type {
   ClassifierConfig,
@@ -78,14 +81,38 @@ export function isClassifierConfigured(config: SmartRouterConfig): boolean {
   return resolveClassifierModelRef(config, resolveClassifierConfig(config)) !== null;
 }
 
+/**
+ * Whether the configured classifier is usable right now: it is configured AND
+ * its backend is available. A configured `typesafe-ai/*` classifier without
+ * TYPESAFE_API_KEY is unavailable, and the caller uses the heuristic tiers.
+ */
+export function isClassifierAvailable(
+  config: SmartRouterConfig,
+  registry: RouterModelRegistry,
+): boolean {
+  const modelRef = resolveClassifierModelRef(config, resolveClassifierConfig(config));
+  if (!modelRef) return false;
+  return isClassifierBackendAvailable(registry, modelRef);
+}
+
+/**
+ * Non-empty TYPESAFE_API_KEY in the environment. Read on every check so a key
+ * added mid-session (e.g. /typesafe login) is picked up without a restart.
+ */
+function hasTypesafeApiKey(): boolean {
+  return (process.env.TYPESAFE_API_KEY ?? "").trim().length > 0;
+}
+
 /** Light availability check for the classifier backend (no capability checks: the classifier context is text-only and small). */
 export function isClassifierBackendAvailable(
   registry: RouterModelRegistry,
   modelRef: string,
 ): boolean {
   if (isRouterSelfRef(modelRef)) return false;
-  // TypeSafe refs bypass the Pi registry — they use the @typesafe-ai/sdk directly.
-  if (isTypesafeModelRef(modelRef)) return true;
+  // TypeSafe refs bypass the Pi registry — they use the @typesafe-ai/sdk
+  // directly, which authenticates with TYPESAFE_API_KEY. Without the key the
+  // call can never succeed, so the backend is unavailable.
+  if (isTypesafeModelRef(modelRef)) return hasTypesafeApiKey();
   let providerId: string;
   let modelId: string;
   try {
@@ -282,7 +309,7 @@ export async function runClassifier(
   if (isTypesafeModelRef(modelRef)) {
     // Extract model name after the prefix, e.g. "typesafe-ai/jev-latest" → "jev-latest"
     const typesafeModel = modelRef.slice(TYPESAFE_PROVIDER_PREFIX.length + 1) || "jev-latest";
-    return await typesafeEscalate(features, context, {
+    return await typesafeClassify(features, context, {
       timeoutMs: esc.timeoutMs,
       model: typesafeModel,
       stats,

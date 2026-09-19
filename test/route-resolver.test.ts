@@ -320,7 +320,7 @@ describe("resolveRoute: fallback ordering and errors", () => {
   });
 });
 
-describe("resolveRoute: escalation tier override", () => {
+describe("resolveRoute: classifier tier override", () => {
   const overrideRegistry = () =>
     new FakeRegistry({
       models: [

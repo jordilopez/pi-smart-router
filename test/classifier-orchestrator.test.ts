@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   buildClassifierContext,
   classifyWithLlm,
+  isClassifierAvailable,
   isClassifierBackendAvailable,
   isClassifierConfigured,
   isRouterSelfRef,
@@ -10,7 +11,7 @@ import {
   resolveClassifierModelRef,
   resolveClassifierConfig,
   runClassifier,
-} from "../src/escalation.js";
+} from "../src/classifier-orchestrator.js";
 import { DEFAULT_CLASSIFIER_CONFIG } from "../src/types.js";
 import type { PromptFeatures, ResolvedBackend, SmartRouterConfig } from "../src/types.js";
 import { FakeRegistry, captureOf, makeContext, makeFakeProvider, makeModel } from "./helpers.js";
@@ -30,6 +31,8 @@ function features(overrides: Partial<PromptFeatures> = {}): PromptFeatures {
     ...overrides,
   };
 }
+
+afterEach(() => { vi.unstubAllEnvs(); });
 
 function config(overrides: Partial<SmartRouterConfig> = {}): SmartRouterConfig {
   return {
@@ -145,8 +148,16 @@ describe("isClassifierBackendAvailable", () => {
     expect(isClassifierBackendAvailable(registry, "openai/gpt-4o-mini")).toBe(true);
   });
 
-  it("accepts TypeSafe refs without a Pi provider", () => {
+  it("accepts TypeSafe refs when TYPESAFE_API_KEY is set", () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "test-key");
     expect(isClassifierBackendAvailable(new FakeRegistry({}), "typesafe-ai/jev")).toBe(true);
+  });
+
+  it("rejects TypeSafe refs when TYPESAFE_API_KEY is missing or blank", () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "");
+    expect(isClassifierBackendAvailable(new FakeRegistry({}), "typesafe-ai/jev")).toBe(false);
+    vi.stubEnv("TYPESAFE_API_KEY", "   ");
+    expect(isClassifierBackendAvailable(new FakeRegistry({}), "typesafe-ai/jev")).toBe(false);
   });
 
   it("rejects unknown models, unauthenticated providers, malformed refs, and self-refs", () => {
@@ -161,6 +172,33 @@ describe("isClassifierBackendAvailable", () => {
     expect(isClassifierBackendAvailable(registry, "ghost/gpt")).toBe(false);
     expect(isClassifierBackendAvailable(registry, "no-slash")).toBe(false);
     expect(isClassifierBackendAvailable(registry, "pi-smart-router/auto")).toBe(false);
+  });
+});
+
+describe("isClassifierAvailable", () => {
+  it("is true for a typesafe-ai classifier with TYPESAFE_API_KEY set", () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "test-key");
+    const cfg = config({ classifier: { model: "typesafe-ai/jev", timeoutMs: 60 } });
+    expect(isClassifierAvailable(cfg, new FakeRegistry({}))).toBe(true);
+  });
+
+  it("is false for a typesafe-ai classifier without the key", () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "");
+    const cfg = config({ classifier: { model: "typesafe-ai/jev", timeoutMs: 60 } });
+    expect(isClassifierAvailable(cfg, new FakeRegistry({}))).toBe(false);
+  });
+
+  it("is false when no classifier is configured", () => {
+    expect(isClassifierAvailable(config(), new FakeRegistry({}))).toBe(false);
+  });
+
+  it("follows registry auth for non-typesafe refs", () => {
+    const registry = new FakeRegistry({
+      models: [makeModel({ provider: "openai", id: "gpt-4o-mini" })],
+    });
+    const cfg = config({ classifier: { model: "openai/gpt-4o-mini", timeoutMs: 60 } });
+    expect(isClassifierAvailable(cfg, registry)).toBe(true);
+    expect(isClassifierAvailable(cfg, new FakeRegistry({}))).toBe(false);
   });
 });
 

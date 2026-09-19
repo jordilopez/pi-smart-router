@@ -1,5 +1,5 @@
 /**
- * Unit tests for the TypeSafe / Jev escalation client.
+ * Unit tests for the TypeSafe / Jev classification client.
  *
  * The @typesafe-ai/sdk is fully mocked: these tests verify the request shape
  * we send (state, Choice question, model, timeout), the verdict handling, and
@@ -29,7 +29,7 @@ vi.mock("@typesafe-ai/sdk", () => {
   };
 });
 
-import { buildTypesafeClassifierState, resetTypesafeClient, typesafeEscalate } from "../src/typesafe-client.js";
+import { buildTypesafeClassifierState, resetTypesafeClient, typesafeClassify } from "../src/typesafe-client.js";
 import type { PromptFeatures } from "../src/types.js";
 import { makeContext } from "./helpers.js";
 
@@ -144,25 +144,25 @@ describe("buildTypesafeClassifierState", () => {
 });
 
 // ============================================================================
-// typesafeEscalate
+// typesafeClassify
 // ============================================================================
 
-describe("typesafeEscalate", () => {
+describe("typesafeClassify", () => {
   it("returns 'fast' when Jev selects the fast tier", async () => {
     resolveSystemOne("fast");
-    const verdict = await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 });
+    const verdict = await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 });
     expect(verdict).toBe("fast");
   });
 
   it("returns 'balanced' when Jev selects the balanced tier", async () => {
     resolveSystemOne("balanced");
-    const verdict = await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 });
+    const verdict = await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 });
     expect(verdict).toBe("balanced");
   });
 
   it("offers all four tiers", async () => {
     resolveSystemOne("fast");
-    await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 });
+    await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 });
 
     const request = mocks.systemOne.mock.calls[0][0] as {
       questions: { tier: { type: string; criteria: Record<string, string> } };
@@ -176,12 +176,12 @@ describe("typesafeEscalate", () => {
 
   it("accepts a four-tier verdict", async () => {
     resolveSystemOne("powerful");
-    await expect(typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBe("powerful");
+    await expect(typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBe("powerful");
   });
 
   it("uses the configured model and timeout", async () => {
     resolveSystemOne("fast");
-    await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 2500, model: "jev-custom" });
+    await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 2500, model: "jev-custom" });
 
     const request = mocks.systemOne.mock.calls[0][0] as { model: string };
     const options = mocks.systemOne.mock.calls[0][1] as { timeout: number; signal: AbortSignal };
@@ -192,37 +192,37 @@ describe("typesafeEscalate", () => {
 
   it("defaults the model to jev-latest", async () => {
     resolveSystemOne("fast");
-    await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 });
+    await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 });
     const request = mocks.systemOne.mock.calls[0][0] as { model: string };
     expect(request.model).toBe("jev-latest");
   });
 
   it("returns null when the API call rejects (never throws)", async () => {
     mocks.systemOne.mockRejectedValue(new Error("network down"));
-    await expect(typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBeNull();
+    await expect(typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBeNull();
   });
 
   it("returns null when the client cannot be created", async () => {
     mocks.clientConstructor.mockImplementation(() => {
       throw new Error("TYPESAFE_API_KEY missing");
     });
-    await expect(typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBeNull();
+    await expect(typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBeNull();
     expect(mocks.systemOne).not.toHaveBeenCalled();
   });
 
   it("returns null for an unexpected verdict label", async () => {
     resolveSystemOne("medium");
-    await expect(typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBeNull();
+    await expect(typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 })).resolves.toBeNull();
   });
 
   it("reuses the lazily-created client until reset", async () => {
     resolveSystemOne("fast");
-    await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 });
-    await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 });
+    await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 });
+    await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 });
     expect(mocks.clientConstructor).toHaveBeenCalledTimes(1);
 
     resetTypesafeClient();
-    await typesafeEscalate(makeFeatures(), makeContext(), { timeoutMs: 1500 });
+    await typesafeClassify(makeFeatures(), makeContext(), { timeoutMs: 1500 });
     expect(mocks.clientConstructor).toHaveBeenCalledTimes(2);
   });
 });

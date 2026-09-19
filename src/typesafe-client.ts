@@ -97,7 +97,7 @@ export interface TypesafeClassifyOptions {
  * timeout, network, or a verdict outside the allowed set) — the caller falls
  * back to the heuristic tier. Never throws.
  */
-export async function typesafeEscalate(
+export async function typesafeClassify(
   features: PromptFeatures,
   context: Context,
   options: TypesafeClassifyOptions,

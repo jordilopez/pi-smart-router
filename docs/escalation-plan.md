@@ -1,5 +1,9 @@
 # ADR: Borderline-Band LLM Escalation
 
+> **Status:** Superseded | see commits 3b9aa03..876be3a | **Original date** 2025-09-08
+>
+> This design was replaced by the per-turn classifier (`classifier.model` using TypeSafe Jev or any LLM). See `src/classifier-orchestrator.ts`.
+
 > **Status:** implemented | **Date:** 2025-09-08
 
 ## Context

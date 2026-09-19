@@ -19,7 +19,7 @@ import type {
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { buildStreamOptions, createDelegationModel, delegateToBackend, resolveBackend } from "./backend.js";
 import { classifyPrompt } from "./classifier.js";
-import { isClassifierConfigured, runClassifier } from "./escalation.js";
+import { isClassifierAvailable, runClassifier } from "./classifier-orchestrator.js";
 import { debugLog } from "./log.js";
 import { classifierThresholds, resolveRoute, tierForScore } from "./route-resolver.js";
 import { ROUTE_EMOJI, RouterError } from "./types.js";
@@ -251,12 +251,14 @@ export function streamSmartRouter(
       invalidateRouteIfNewPrompt(context);
       if (!currentRoute) {
         const features: PromptFeatures = classifyPrompt(context, state.config.classifier ?? {});
-        // When a classifier is configured it decides the tier; the heuristic
-        // score never selects it, and a classifier failure falls through to
-        // defaultRoute/fallbacks. Rules still win first. With no classifier
-        // configured the heuristic thresholds apply as before.
-        const classifierConfigured = isClassifierConfigured(state.config);
-        const useHeuristicTier = !classifierConfigured;
+        // When a usable classifier is configured it decides the tier; the
+        // heuristic score never selects it, and a transient classifier failure
+        // falls through to defaultRoute/fallbacks. Rules still win first. With
+        // no classifier configured -- or a configured classifier whose backend
+        // is unavailable (e.g. a typesafe-ai ref with no TYPESAFE_API_KEY) --
+        // the heuristic thresholds apply instead.
+        const classifierActive = isClassifierAvailable(state.config, state.registry);
+        const useHeuristicTier = !classifierActive;
         let decision = resolveRoute(
           state.registry,
           state.config,
@@ -277,7 +279,7 @@ export function streamSmartRouter(
         const heuristicTier = tierForScore(features.complexityScore, classifierThresholds(state.config));
         let classifierVerdict: RouteTier | undefined;
         const classifierStats: ClassifierStats = {};
-        if (classifierConfigured && decision.reason !== "rule") {
+        if (classifierActive && decision.reason !== "rule") {
           state.setStatus?.(STATUS_KEY, "router: classifying…");
           const verdict = await runClassifier(
             state.registry,
@@ -305,8 +307,8 @@ export function streamSmartRouter(
             );
           }
         }
-        // The heuristic tier is only a diagnostic in band mode, where it is the
-        // baseline the classifier refines. In always mode it plays no part.
+        // In heuristic mode the tier step selected the route, so the tier is
+        // the reason it was chosen; in classifier mode the verdict decided.
         if (useHeuristicTier) decision.heuristicTier = heuristicTier;
         decision.classifierVerdict = classifierVerdict;
         if (classifierVerdict && classifierStats && (classifierStats.elapsedMs !== undefined || classifierStats.inputTokens !== undefined)) {
