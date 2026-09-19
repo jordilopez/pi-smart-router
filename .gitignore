@@ -9,3 +9,6 @@ dist/
 
 # OS artifacts
 .DS_Store
+
+# Tasks
+tasks/
