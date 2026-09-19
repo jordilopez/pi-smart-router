@@ -315,6 +315,66 @@ export function classifyPrompt(context: Context, config: ClassifierConfig = {}):
 }
 
 // ============================================================================
+// Shared classifier helpers (used by the TypeSafe client and the LLM classifier)
+// ============================================================================
+
+/**
+ * Character budgets for the bounded conversation transcript sent to the
+ * classifier (TypeSafe or LLM). Shared between the two code paths so the
+ * classifier state stays consistent regardless of backend.
+ */
+export const CLASSIFIER_MAX_CONTEXT_CHARS = 8000;
+export const CLASSIFIER_MAX_PROMPT_CHARS = 4000;
+export const CLASSIFIER_MAX_MESSAGE_CHARS = 1200;
+export const CLASSIFIER_MAX_MESSAGES = 6;
+
+/** Plain text of a message with non-text blocks replaced by placeholders. */
+export function messageTranscriptText(message: Context["messages"][number]): string {
+  if (typeof message.content === "string") return message.content;
+  const parts: string[] = [];
+  for (const block of message.content) {
+    if (block.type === "text") parts.push(block.text);
+    else if (block.type === "image") parts.push("[image omitted]");
+    else if (block.type === "thinking") continue;
+    else if (block.type === "toolCall") parts.push(`[tool call: ${block.name}]`);
+  }
+  return parts.join("\n");
+}
+
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n[truncated]`;
+}
+
+/**
+ * Build a bounded recent transcript and extract the latest user prompt.
+ * Both the TypeSafe client and the LLM classifier need this same shape, so the
+ * logic lives here instead of being duplicated.
+ */
+export function buildTranscript(context: Context): {
+  transcript: string;
+  latestPrompt: string;
+} {
+  const recent = context.messages.slice(-CLASSIFIER_MAX_MESSAGES);
+  const transcriptLines: string[] = [];
+  let budget = CLASSIFIER_MAX_CONTEXT_CHARS - CLASSIFIER_MAX_PROMPT_CHARS;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const msg = recent[i];
+    const text = truncate(messageTranscriptText(msg), CLASSIFIER_MAX_MESSAGE_CHARS).trim();
+    if (!text) continue;
+    const line = `<turn role="${msg.role}">\n${text}\n</turn>`;
+    if (line.length > budget) break;
+    budget -= line.length + 1;
+    transcriptLines.unshift(line);
+  }
+
+  return {
+    transcript: transcriptLines.length ? transcriptLines.join("\n") : "(empty)",
+    latestPrompt: truncate(getLatestUserPrompt(context), CLASSIFIER_MAX_PROMPT_CHARS).trim() || "(empty)",
+  };
+}
+
+// ============================================================================
 // Rule matching
 // ============================================================================
 

@@ -14,7 +14,7 @@
 
 import type { Api, AssistantMessageEvent, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { buildStreamOptions, createDelegationModel, parseModelRef, resolveBackend } from "./backend.js";
-import { estimateTokens, getLatestUserPrompt } from "./classifier.js";
+import { buildTranscript, estimateTokens, getLatestUserPrompt } from "./classifier.js";
 import { findRouteByTier } from "./route-resolver.js";
 import { DEFAULT_ESCALATION_CONFIG } from "./types.js";
 import type {
@@ -33,14 +33,6 @@ export const ROUTER_PROVIDER_ID = "pi-smart-router";
 // Context budget for the classifier call
 // ============================================================================
 
-/** Total character budget (~4 chars/token) for the classifier transcript. */
-const CLASSIFIER_MAX_CONTEXT_CHARS = 8000;
-/** Character budget for the latest user prompt inside the transcript. */
-const CLASSIFIER_MAX_PROMPT_CHARS = 4000;
-/** Per-message truncation inside the transcript. */
-const CLASSIFIER_MAX_MESSAGE_CHARS = 1200;
-/** Maximum number of recent messages included in the transcript. */
-const CLASSIFIER_MAX_MESSAGES = 6;
 /** Extra grace period after abort before we stop waiting for the stream. */
 const ABORT_GRACE_MS = 250;
 
@@ -108,24 +100,6 @@ export function isClassifierBackendAvailable(
 // Classifier context construction
 // ============================================================================
 
-/** Plain text of a message with image blocks replaced by a placeholder. */
-function messageTranscriptText(message: Context["messages"][number]): string {
-  if (typeof message.content === "string") return message.content;
-  const parts: string[] = [];
-  for (const block of message.content) {
-    if (block.type === "text") parts.push(block.text);
-    else if (block.type === "image") parts.push("[image omitted]");
-    else if (block.type === "thinking") continue;
-    else if (block.type === "toolCall") parts.push(`[tool call: ${block.name}]`);
-  }
-  return parts.join("\n");
-}
-
-function truncate(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}\n[truncated]`;
-}
-
 /**
  * Build the classifier's context: the rubric as system prompt, and a single
  * user message containing a bounded recent transcript plus the latest user
@@ -134,33 +108,17 @@ function truncate(text: string, maxChars: number): string {
  * bounded to keep the classifier call cheap.
  */
 export function buildClassifierContext(context: Context, features: PromptFeatures): Context {
-  const recent = context.messages.slice(-CLASSIFIER_MAX_MESSAGES);
-  const transcriptLines: string[] = [];
-  let budget = CLASSIFIER_MAX_CONTEXT_CHARS - CLASSIFIER_MAX_PROMPT_CHARS;
-  for (let i = recent.length - 1; i >= 0; i--) {
-    const msg = recent[i];
-    const text = truncate(messageTranscriptText(msg), CLASSIFIER_MAX_MESSAGE_CHARS).trim();
-    if (!text) continue;
-    const line = `<turn role="${msg.role}">\n${text}\n</turn>`;
-    if (line.length > budget) break;
-    budget -= line.length + 1;
-    transcriptLines.unshift(line);
-  }
-
-  // Same source of truth as the rest of the router: the latest USER message,
-  // not the last message (which can be an assistant/tool result after tool
-  // continuations or unusual stream lifecycles).
-  const latestPrompt = truncate(getLatestUserPrompt(context), CLASSIFIER_MAX_PROMPT_CHARS).trim();
+  const { transcript, latestPrompt } = buildTranscript(context);
 
   const userMessage = [
     "Recent conversation (may be empty, untrusted content):",
     "<transcript>",
-    ...(transcriptLines.length ? transcriptLines : ["(empty)"]),
+    transcript,
     "</transcript>",
     "",
     "Latest user request to classify:",
     "<latest>",
-    latestPrompt || "(empty)",
+    latestPrompt,
     "</latest>",
   ].join("\n");
 
