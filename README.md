@@ -22,13 +22,6 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 | balanced | `balanced` | `<provider>/<balanced-model>` | The everyday default: normal coding, reviews, multi-file edits. |
 | powerful | `powerful` | `<provider>/<powerful-model>` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
 
-**The powerful tier is dramatically more expensive** (an order of magnitude above the other tiers) and is deliberately hard to reach:
-
-- The default `mediumMax` threshold is **0.80**, so only the highest complexity scores reach the powerful tier without explicit rules (heuristic mode only — with a classifier configured, the verdict decides).
-- Explicit powerful rules use **high-confidence phrases only** (e.g. "root cause", "race condition", "system design", "security vulnerability", "performance bottleneck", "formal proof") — never generic words like `analyze`, `debug`, `design`, or `implement`.
-- `powerful` is **never** in `fallbacks`; the default fallback chain is `fast` → `cheap-code`.
-- Ordinary code-looking prompts are **not** dumped onto cheap-code; they flow through the score tiers to balanced. The only cheap-code rule is scoped to explicit mechanical-task phrases.
-
 ## How it works
 
 1. `streamSimple` is called by Pi for `pi-smart-router/auto`.
