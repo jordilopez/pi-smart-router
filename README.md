@@ -2,7 +2,7 @@
 
 A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a custom provider, `pi-smart-router`, with a single model `pi-smart-router/auto`. Each prompt is classified once per turn and routed through a **four-tier** resolver to the best configured **backend model** through Pi's model registry.
 
-Classification and execution are separate concerns: local heuristics pick the tier by default, or an optional classifier (TypeSafe Jev or any one-shot LLM) does it semantically; the selected backend LLM performs the actual work. The `fast` backend is **not** used as a judge unless you explicitly configure it as the classifier.
+Classification and execution are separate concerns: the selected backend LLM performs the actual work, while the tier is chosen by a **classifier** — the recommended setup uses [TypeSafe Jev](#typesafe-jev-setup) (or any one-shot LLM); without it, a built-in keyword heuristic (English-oriented, no semantic understanding) picks the tier. The `fast` backend is **not** used as a judge unless you explicitly configure it as the classifier.
 
 ```
 pi -e ./src/index.ts
@@ -136,7 +136,7 @@ Routes are only resolved when actually selected - backends that don't exist or a
     },
     "maxPromptTokens": 4000,          // prompt analysis truncation limit
     "maxContextTokens": 100000,       // context analysis limit
-    "model": "typesafe-ai/jev",      // optional classifier backend; omit for heuristic-only
+    "model": "typesafe-ai/jev",      // recommended: per-turn classifier; omit to fall back to the keyword heuristic
     "timeoutMs": 1500                 // aborts the classifier call; see "Classifier" below
   },
   "rules": [                          // optional, evaluated by priority (desc)
@@ -185,13 +185,15 @@ For each new turn (re-classified only on `turn_start`):
 - route `maxTokens` must not exceed `model.maxTokens`
 - the model/provider must exist and have configured auth
 
-## Classifier (optional LLM / TypeSafe Jev)
+## Classifier (recommended: LLM / TypeSafe Jev)
 
-The heuristic score is fast, free, and blind to meaning — semantically equal
-prompts can land on opposite sides of a tier boundary. When `classifier.model`
-is configured it classifies **every** new turn and its verdict is final (any
-tier, including `powerful`); without it the heuristic thresholds apply. Either
-way, explicit rules always win first.
+Keyword thresholds are fast and free but blind to meaning — and English-only —
+so semantically equal prompts can land on opposite sides of a tier boundary.
+**Configure a classifier** (`classifier.model`) and it classifies **every** new
+turn; its verdict is final (any tier, including `powerful`). Without it the
+router falls back to the heuristic score: deterministic, no API key needed,
+but keyword-based and English-oriented. Either way, explicit rules always win
+first.
 
 Two backends:
 
@@ -209,12 +211,12 @@ failures (timeout, stream error, unparseable answer) route through
 `defaultRoute`/fallbacks — never a heuristic tier. `pi-smart-router/*` refs
 are rejected at config load so the router can never classify into itself.
 
-The heuristic score (used in fallback mode) is computed from the prompt and
-context: estimated tokens, code/reasoning keyword likelihoods, tool and image
-presence, combined with configurable weights. Harness-injected skill bodies
-are stripped before scoring — and in the classifier transcript replaced by a
-`[skill invoked: <name>]` marker — so a SKILL.md cannot inflate the score or
-saturate the classifier's bounded budget.
+The heuristic fallback is computed from the prompt and context: estimated
+tokens, code/reasoning keyword likelihoods (English keyword lists), tool and
+image presence, combined with configurable weights. Harness-injected skill
+bodies are stripped before scoring — and in the classifier transcript replaced
+by a `[skill invoked: <name>]` marker — so a SKILL.md cannot inflate the score
+or saturate the classifier's bounded budget.
 
 ```jsonc
 {
