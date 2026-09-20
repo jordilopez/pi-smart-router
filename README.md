@@ -17,8 +17,8 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
-| cheap | `cheap-code` | `<provider>/<cheap-model>` | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules, in heuristic mode. **Not local** — models listed in the example config are hosted. |
-| fast | `fast` | `<provider>/<fast-model>` | Greetings, quick questions, trivial lookups. |
+| cheap | `cheap-code` | `<provider>/<cheap-model>` | Trivial work: greetings and small talk, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules, in heuristic mode. **Not local** — models listed in the example config are hosted. |
+| fast | `fast` | `<provider>/<fast-model>` | Factual questions, trivial lookups, one-line edits. |
 | balanced | `balanced` | `<provider>/<balanced-model>` | The everyday default: normal coding, reviews, multi-file edits. |
 | powerful | `powerful` | `<provider>/<powerful-model>` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
 
