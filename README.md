@@ -17,15 +17,15 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
-| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules, in heuristic mode. **Not local** - mimo-v2.5 is a cheap hosted code model. |
-| fast | `fast` | `opencode-go/deepseek-v4-flash` | Greetings, quick questions, trivial lookups. |
-| balanced | `balanced` | `opencode-go/gpt-5.6-luna` (exact lowercase ID) | The everyday default: normal coding, reviews, multi-file edits. |
-| powerful | `powerful` | `opencode-go/kimi-k3` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
+| cheap | `cheap-code` | `<provider>/<cheap-model>` | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules, in heuristic mode. **Not local** — models listed in the example config are hosted. |
+| fast | `fast` | `<provider>/<fast-model>` | Greetings, quick questions, trivial lookups. |
+| balanced | `balanced` | `<provider>/<balanced-model>` | The everyday default: normal coding, reviews, multi-file edits. |
+| powerful | `powerful` | `<provider>/<powerful-model>` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
 
-**Kimi is dramatically more expensive** (an order of magnitude above the other tiers) and is deliberately hard to reach:
+**The powerful tier is dramatically more expensive** (an order of magnitude above the other tiers) and is deliberately hard to reach:
 
 - The default `mediumMax` threshold is **0.80**, so only the highest complexity scores reach the powerful tier without explicit rules.
-- Explicit powerful rules use **high-confidence phrases only** (e.g. "root cause", "race condition", "system design", "security vulnerability", "performance bottleneck", "formal proof") - never generic words like `analyze`, `debug`, `design`, or `implement`.
+- Explicit powerful rules use **high-confidence phrases only** (e.g. "root cause", "race condition", "system design", "security vulnerability", "performance bottleneck", "formal proof") — never generic words like `analyze`, `debug`, `design`, or `implement`.
 - `powerful` is **never** in `fallbacks`; the default fallback chain is `fast` → `cheap-code`.
 - Ordinary code-looking prompts are **not** dumped onto cheap-code; they flow through the score tiers to balanced. The only cheap-code rule is scoped to explicit mechanical-task phrases.
 
@@ -104,10 +104,10 @@ If your `~/.pi/agent/settings.json` contains an `enabledModels` allowlist, add t
 {
   "enabledModels": [
     "pi-smart-router/auto",
-    "opencode-go/deepseek-v4-flash",
-    "opencode-go/mimo-v2.5",
-    "opencode-go/gpt-5.6-luna",
-    "opencode-go/kimi-k3"
+    "<provider>/<fast-model>",
+    "<provider>/<cheap-model>",
+    "<provider>/<balanced-model>",
+    "<provider>/<powerful-model>"
   ]
 }
 ```
@@ -136,7 +136,7 @@ Two-file layout:
 
 **Precedence:** project config (if trusted and present) > global config > built-in defaults. A config file that exists replaces the lower-priority one entirely (no deep merge).
 
-Built-in defaults (used when no config file exists) mirror the recommended policy: `fast` → `opencode-go/deepseek-v4-flash`, `cheap-code` → `opencode-go/mimo-v2.5`, `balanced` → `opencode-go/gpt-5.6-luna`, `powerful` → `opencode-go/kimi-k3`; defaultRoute `balanced`; fallbacks `["fast", "cheap-code"]`.
+Built-in defaults (used when no config file exists) mirror the recommended policy: `fast` → `<provider>/<fast-model>`, `cheap-code` → `<provider>/<cheap-model>`, `balanced` → `<provider>/<balanced-model>`, `powerful` → `<provider>/<powerful-model>`; defaultRoute `balanced`; fallbacks `["fast", "cheap-code"]`.
 
 Routes are only resolved when actually selected - backends that don't exist or aren't configured do **not** break the extension; they're skipped and the fallback chain takes over. But **invalid config files fail loudly on load** (see [Troubleshooting](#troubleshooting)).
 
@@ -321,7 +321,7 @@ Until one of these policies is implemented, users should treat the route status 
 
 ## Route visibility in Pi's UI
 
-- **Footer status** - after each route decision the footer shows the active backend and how the tier was chosen, e.g. `🎯 balanced · opencode-go/gpt-5.6-luna · threshold`, `⚡ fast · opencode-go/deepseek-v4-flash · classifier`, or `💎 powerful · opencode-go/kimi-k3 · classifier`. When the classifier reports usage, its cost is appended: `· 742ms/350i/47o`. The heuristic complexity score is intentionally omitted (it does not select the tier when a classifier is configured); it remains in the log line. The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
+- **Footer status** - after each route decision the footer shows the active backend and how the tier was chosen, e.g. `🎯 balanced · <provider>/<balanced-model> · threshold`, `⚡ fast · <provider>/<fast-model> · classifier`, or `💎 powerful · <provider>/<powerful-model> · classifier`. When the classifier reports usage, its cost is appended: `· 742ms/350i/47o`. The heuristic complexity score is intentionally omitted (it does not select the tier when a classifier is configured); it remains in the log line. The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
 - **No transcript noise** - route decisions are intentionally *not* appended to the transcript; the footer status is the single source of that information. For the full detail (reason, explanation, matched rule), check the log file below.
 - **Footer model unchanged** - Pi's normal footer model remains `pi-smart-router/auto`; the footer status line above is where you see which backend actually served the turn.
 
@@ -330,13 +330,14 @@ Until one of these policies is implemented, users should treat the route status 
 Diagnostics are written to a **log file, never to stdout/stderr** - raw console output from an in-process extension is painted directly over the pi TUI and corrupts the input line. One log line is emitted per route decision (never includes prompt text) and names the **actual backend**. With the default `showRouteStatus: true` the concise line is logged:
 
 ```
-[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=opencode-go/gpt-5.6-luna score=0.42 turn=3 session=a1b2c3d4
+[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=<provider>/<balanced-model> score=0.42 turn=3 session=a1b2c3d4
 ```
 
 Setting `logDecisions: true` switches to the detailed line, which adds the matched rule, decision reason, and explanation:
 
 ```
-[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=opencode-go/gpt-5.6-luna score=0.42 turn=3 session=a1b2c3d4 rule=- reason=threshold detail="Complexity 0.42 (balanced tier) -> route 'balanced'"
+[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=<provider>/<balanced-model> score=0.42 turn=3 session=a1b2c3d4 rule=- reason=threshold detail="Complexity 0.42 (balanced tier) -> route 'balanced'"
+```
 ```
 
 The log file defaults to `<tmpdir>/pi-smart-router.log` (e.g. `/tmp/pi-smart-router.log` on macOS/Linux) and can be redirected with the `PI_SMART_ROUTER_LOG` environment variable (a leading `~` is expanded; `~user` forms are not):
@@ -351,10 +352,10 @@ The `session=` prefix (first 8 characters of the Pi session id) disambiguates pa
 
 - **`400 MissingSessionID: Request is missing x-opencode-session`** - Console Go (opencode-go) requires a session header to route requests efficiently. The router forwards Pi's **stable session id** (captured on `session_start` from `ctx.sessionManager.getSessionId()`) as the `x-opencode-session` header on every opencode-go request, so the value stays constant across prompts and tool continuations. If the caller already supplies its own `x-opencode-session` header or `options.sessionId`, that explicit value wins and is forwarded as-is. The header is only injected for `opencode-go` - other providers are untouched.
 - **`No credentials configured for provider 'opencode-go'`** - auth missing. Run `pi auth opencode-go`, set `OPENCODE_API_KEY`, or use `/login opencode-go`.
-- **`Model not found in registry: provider/modelId`** - the route references a model Pi doesn't know. Check spelling (model IDs are exact and lowercase, e.g. `gpt-5.6-luna`) and run `pi --list-models opencode-go` to see the catalog.
+- **`Model not found in registry: provider/modelId`** — the route references a model Pi doesn't know. Check spelling (model IDs are exact and lowercase) and run `pi --list-models <provider>` to see the catalog.
 - **`No compatible backend model available for any configured route`** - every route failed the availability/compatibility checks (missing auth, model missing, context window too small for the current conversation, etc.).
 - **Config error at startup** - pi-smart-router.json is invalid (bad JSON, unknown route reference, duplicate rule id, malformed `provider/modelId`, wrong `version`). Fix the file; the message names the offending path.
-- **Kimi (powerful) shows up more than expected** - check your `mediumMax` (default 0.80) and your rules; the policy deliberately keeps kimi-k3 rare and out of the fallback chain.
+- **The powerful model shows up more than expected** — check your `mediumMax` (default 0.80) and your rules; the policy deliberately keeps the powerful model rare and out of the fallback chain.
 
 ## Limitations
 
