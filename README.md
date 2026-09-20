@@ -1,8 +1,8 @@
 # pi Smart Router
 
-A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a custom provider, `pi-smart-router`, with a single model `pi-smart-router/auto`. Each prompt is classified locally (no extra LLM calls) and routed through a **four-tier** resolver to the best configured **backend model** through Pi's model registry.
+A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a custom provider, `pi-smart-router`, with a single model `pi-smart-router/auto`. Each prompt is classified once per turn and routed through a **four-tier** resolver to the best configured **backend model** through Pi's model registry.
 
-The router's classification model and its execution model are separate concerns: the router uses deterministic local heuristics, or an optional configured classifier (an LLM or TypeSafe Jev), to choose a backend, while the selected backend LLM performs the actual work. The `fast` backend is **not** used as a judge unless you explicitly configure it as the classifier.
+Classification and execution are separate concerns: local heuristics pick the tier by default, or an optional classifier (TypeSafe Jev or any one-shot LLM) does it semantically; the selected backend LLM performs the actual work. The `fast` backend is **not** used as a judge unless you explicitly configure it as the classifier.
 
 ```
 pi -e ./src/index.ts
@@ -17,7 +17,7 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
-| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules. **Not local** - mimo-v2.5 is a cheap hosted code model. |
+| cheap | `cheap-code` | `opencode-go/mimo-v2.5` | Trivial work: greetings, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules, in heuristic mode. **Not local** - mimo-v2.5 is a cheap hosted code model. |
 | fast | `fast` | `opencode-go/deepseek-v4-flash` | Greetings, quick questions, trivial lookups. |
 | balanced | `balanced` | `opencode-go/gpt-5.6-luna` (exact lowercase ID) | The everyday default: normal coding, reviews, multi-file edits. |
 | powerful | `powerful` | `opencode-go/kimi-k3` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
@@ -35,7 +35,7 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 2. Once per **turn**, the prompt/context is classified locally into features and a weighted **complexity score** (0-1) is computed. The classifier estimates prompt and context tokens, detects code and reasoning signals, counts keyword-group matches, and records whether tools or images are present. It does not call any LLM, inspect the quality of a previous answer, or predict success semantically.
 3. A resolver picks a **route** (see [Routing decision order](#routing-decision-order)). Each route maps to a backend `provider/modelId`. When a classifier is configured its verdict selects the tier; otherwise the score is compared with configurable thresholds. Explicit high-confidence rules override both.
 4. The request is delegated to the backend provider via `modelRegistry.getProvider(...).streamSimple(...)`, with auth (`apiKey`/`headers`/`baseUrl`) resolved through `modelRegistry.getApiKeyAndHeaders(...)`. All stream events are forwarded unchanged.
-5. Tool-call continuations **reuse the turn's route decision** - the backend never changes mid-turn.
+5. Tool-call continuations **reuse the turn's route decision** - the backend never changes mid-turn. `turn_start` resets the cache; a message-based heuristic (new user prompt after tool results) is kept as fallback safety. Failures after the first stream event surface as stream errors, not fallbacks.
 
 ### Declared context window of `pi-smart-router/auto`
 
@@ -79,10 +79,10 @@ Install the package into Pi's global settings (the default; do not use `-l`):
 pi install /path/to/pi-smart-router
 ```
 
-For this repository:
+For this repository, from its parent directory:
 
 ```sh
-pi install /Users/jordi/development/routerrific/pi-smart-router
+pi install ./pi-smart-router
 ```
 
 Verify the installation:
@@ -115,6 +115,14 @@ If your `~/.pi/agent/settings.json` contains an `enabledModels` allowlist, add t
 Use `pi install -l /path/to/pi-smart-router` only for a project-local installation. Global installs are recorded in `~/.pi/agent/settings.json`; project-local installs are recorded in `.pi/settings.json`.
 
 The extension loads as plain TypeScript (Pi loads extensions via jiti) - no build step. `zod` is a runtime dependency; TypeScript and Vitest are only needed for development.
+
+### Selecting the router model
+
+```sh
+pi                                    # then in the TUI: /model pi-smart-router/auto
+pi --model pi-smart-router/auto       # or straight from the shell
+pi -e ./src/index.ts --model pi-smart-router/auto   # when running from the repository
+```
 
 ## Configuration files
 
@@ -216,38 +224,27 @@ For each new turn (re-classified only on `turn_start`):
 
 ## Classifier (optional LLM / TypeSafe Jev)
 
-The heuristic classifier is fast, free, and blind to meaning — prompts near a
-tier boundary can land on the wrong side. When a classifier is configured
-(`classifier.model`), it classifies **every** new turn instead: the heuristic
-score does not select the tier. Without a configured model, the heuristic
-thresholds apply as before.
+The heuristic score is fast, free, and blind to meaning — semantically equal
+prompts can land on opposite sides of a tier boundary. When `classifier.model`
+is configured it classifies **every** new turn and its verdict is final (any
+tier, including `powerful`); without it the heuristic thresholds apply. Either
+way, explicit rules always win first.
 
-- **Backends** (`classifier.model`):
-  - A `typesafe-ai/...` ref (e.g. `typesafe-ai/jev`) is served by the
-    `@typesafe-ai/sdk` directly — a fast System One **Choice** judgment over
-    `cheap`/`fast`/`balanced`/`powerful`. **This requires `TYPESAFE_API_KEY` in
-    the environment** (see [TypeSafe Jev setup](#typesafe-jev-setup)). Without
-    it the classifier is treated as unavailable and the heuristic thresholds
-    apply instead (the router does not fall back to `defaultRoute` for a
-    missing key).
-  - Any other `provider/modelId` is called as a one-shot LLM
-    (`maxTokens: 4`, `temperature: 0`).
-- **What happens:** the classifier sees a bounded recent transcript (≤ ~2000
-  tokens) plus the heuristic's own signals and returns a tier. The verdict
-  determines the route (it may promote *or* demote, including to `powerful`).
-- **Rules win first:** explicit rules are never second-guessed.
-- **Unavailable backend is not a failure:** a `typesafe-ai/*` classifier with no
-  `TYPESAFE_API_KEY` is detected up front and routes through the heuristic
-  tiers, exactly as if no classifier were configured (no per-turn call, no
-  timeout). The key is read from the process environment, so export it before
-  starting Pi; changing it requires a restart.
-- **Failure is not guessed:** timeout (`timeoutMs`, default 1500), auth/stream
-  error, or an unparseable answer mean the router skips the tier step and uses
-  `defaultRoute` (then the fallbacks chain) — never a heuristic tier.
-- **Never:** the classifier cannot point at the router itself
-  (`pi-smart-router/*` is rejected at config load).
-- **Cost:** one classifier call per new turn (tool-call continuations reuse the
-  cached decision).
+Two backends:
+
+- `typesafe-ai/...` ref (e.g. `typesafe-ai/jev`) — served by the
+  `@typesafe-ai/sdk` directly, one System One **Choice** call per new turn.
+  Requires `TYPESAFE_API_KEY` in the environment (see
+  [setup](#typesafe-jev-setup)); without it the classifier is unavailable and
+  the heuristic thresholds apply instead.
+- any other `provider/modelId` — a one-shot LLM call
+  (`maxTokens: 4`, `temperature: 0`).
+
+The classifier sees the four-tier rubric, a bounded recent transcript
+(~2000 tokens, untrusted input), and the heuristic's own signals. Transient
+failures (timeout, stream error, unparseable answer) route through
+`defaultRoute`/fallbacks — never a heuristic tier. `pi-smart-router/*` refs
+are rejected at config load so the router can never classify into itself.
 
 ```jsonc
 {
@@ -267,20 +264,13 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 - **Semantic tier choice.** It reads a bounded transcript plus the user request
   and returns one of `cheap`/`fast`/`balanced`/`powerful` with a probability —
   fixing boundary misrouting that keywords cannot.
-- **Sub-second and cheap.** One System One Choice call per new turn, no
-  multi-step reasoning; tool-call continuations reuse the cached decision.
-- **Verdict is final, any tier.** Unlike the old band heuristic it may promote
-  *or* demote, including to `powerful` — which is otherwise hard to reach.
-- **Bounded context.** The classifier sees the four-tier rubric, a ~2000-token
-  recent transcript, and the heuristic's own signals; the transcript is
-  untrusted input and is never allowed to be the whole program.
-- **Fail-safe.** Missing key → heuristic thresholds; timeout/error/unparseable
-  answer → `defaultRoute`; explicit rules always win first; the router can
-  never classify itself into a loop (`pi-smart-router/*` is rejected).
-
-Data note: each classified turn sends the bounded transcript (not the full
-conversation, not files) to TypeSafe, and usage is billed to your TypeSafe
-account. Omit `classifier.model` to stay fully local.
+- **Sub-second and cheap.** No multi-step reasoning; tool-call continuations
+  reuse the cached decision.
+- **Verdict is final, any tier.** It may promote *or* demote, including to
+  `powerful` — which is otherwise hard to reach.
+- **Data note.** Each classified turn sends the bounded transcript (not the
+  full conversation, not files) to TypeSafe, and usage is billed to your
+  TypeSafe account. Omit `classifier.model` to stay fully local.
 
 ### TypeSafe Jev setup
 
@@ -310,19 +300,6 @@ account. Omit `classifier.model` to stay fully local.
 > and is only needed for its own `typesafe_evaluate` tool. The router always
 > reads `TYPESAFE_API_KEY` from the environment. Set both if you want the tool
 > *and* Jev routing.
-
-Optional: `timeoutMs` bounds the call (default 1500). On timeout the router uses
-`defaultRoute` (`balanced` by default) rather than guessing a tier.
-
-The route log line includes `classifier=<verdict>` for classifier-decided turns
-(or `classifier=-`); the footer status briefly shows `router: classifying…` while
-the call is in flight.
-
-## Turn stability
-
-- The route decision is cached per turn. Within a turn (e.g. tool-call continuations) the **same backend is reused**; only classification/route resolution is skipped - every stream request still delegates to the backend.
-- `turn_start` resets the cache. A message-based heuristic (new user prompt after tool results) is kept as fallback safety.
-- The backend is never switched after the first stream event; failures after content has been emitted surface as stream errors, not fallbacks.
 
 ## Future upgrades (deliberately not implemented)
 
@@ -370,23 +347,6 @@ PI_SMART_ROUTER_LOG=~/.pi/agent/logs/pi-smart-router.log pi
 
 The `session=` prefix (first 8 characters of the Pi session id) disambiguates parallel pi sessions appending to a shared log file. Config-load diagnostics on `session_start` and config errors are also logged to the file; config errors additionally surface as a `ctx.ui.notify` toast in the TUI, and router-originated stream failures are prefixed with their error code (e.g. `BACKEND_AUTH_MISSING: ...`) in the stream error message. No raw prompt data is ever logged or stored in entries.
 
-## Selecting the router
-
-After a global installation:
-
-```sh
-pi
-# in the TUI: /model pi-smart-router/auto
-# or from the shell:
-pi --model pi-smart-router/auto
-```
-
-When running directly from the repository, include the extension path:
-
-```sh
-pi -e ./src/index.ts --model pi-smart-router/auto
-```
-
 ## Troubleshooting
 
 - **`400 MissingSessionID: Request is missing x-opencode-session`** - Console Go (opencode-go) requires a session header to route requests efficiently. The router forwards Pi's **stable session id** (captured on `session_start` from `ctx.sessionManager.getSessionId()`) as the `x-opencode-session` header on every opencode-go request, so the value stays constant across prompts and tool continuations. If the caller already supplies its own `x-opencode-session` header or `options.sessionId`, that explicit value wins and is forwarded as-is. The header is only injected for `opencode-go` - other providers are untouched.
@@ -398,13 +358,10 @@ pi -e ./src/index.ts --model pi-smart-router/auto
 
 ## Limitations
 
-- Routing is **per turn, not per tool call**: tool-call continuations keep the turn's route even if the intermediate prompt looks different.
 - Token counts are **heuristics** (`chars/4`, images ≈ 512 tokens); treat thresholds as approximate.
-- Classification is local heuristics by default (keywords/patterns) with no semantic understanding; configuring `classifier.model` adds a semantic judgment via an LLM or TypeSafe Jev. The `fast` route is an execution backend, not a classifier or judge.
-- Routing does not currently evaluate answer quality, test outcomes, tool-loop length, or whether a task is “succeeding” after it starts.
 - `reasoning: "off"` cannot force-disable thinking on providers that always think; it only avoids requesting reasoning. `preserve` keeps the session's thinking level.
 - Backend availability is evaluated when the decision is made; a backend that dies mid-turn surfaces as a stream error (no mid-turn failover).
-- Retry-with-a-stronger-model and signal-based escalation are future design options, not current behavior.
+- The router does not evaluate answer quality or test outcomes after a turn starts (see [Future upgrades](#future-upgrades-deliberately-not-implemented)).
 
 ## Development
 
