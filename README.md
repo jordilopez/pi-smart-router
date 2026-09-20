@@ -22,38 +22,6 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 | balanced | `balanced` | `<provider>/<balanced-model>` | The everyday default: normal coding, reviews, multi-file edits. |
 | powerful | `powerful` | `<provider>/<powerful-model>` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
 
-## How it works
-
-1. `streamSimple` is called by Pi for `pi-smart-router/auto`.
-2. Once per **turn**, the prompt/context is classified locally into features and a weighted **complexity score** (0-1) is computed. The classifier estimates prompt and context tokens, detects code and reasoning signals, counts keyword-group matches, and records whether tools or images are present. It does not call any LLM, inspect the quality of a previous answer, or predict success semantically.
-3. A resolver picks a **route** (see [Routing decision order](#routing-decision-order)). Each route maps to a backend `provider/modelId`. When a classifier is configured its verdict selects the tier; otherwise the score is compared with configurable thresholds. Explicit high-confidence rules override both.
-4. The request is delegated to the backend provider via `modelRegistry.getProvider(...).streamSimple(...)`, with auth (`apiKey`/`headers`/`baseUrl`) resolved through `modelRegistry.getApiKeyAndHeaders(...)`. All stream events are forwarded unchanged.
-5. Tool-call continuations **reuse the turn's route decision** - the backend never changes mid-turn. `turn_start` resets the cache; a message-based heuristic (new user prompt after tool results) is kept as fallback safety. Failures after the first stream event surface as stream errors, not fallbacks.
-
-### Declared context window of `pi-smart-router/auto`
-
-`pi-smart-router/auto` is a **virtual model** - it is never contacted and has no real context window of its own. Its registered `contextWindow` (1M, mirroring the configured 1M-context backends) exists only for Pi core's view of the router: the UI display and compaction triggering. A smaller declared value would make Pi compact conversations long before the backends were actually full.
-
-Actual per-turn fit is enforced separately and per backend: the resolver checks estimated context tokens against each backend model's own `contextWindow * 0.8` (see [Compatibility checks](#routing-decision-order)). If you add backends with smaller windows than 1M, routing stays correct, but the declared 1M makes compaction timing optimistic.
-
-### How the local complexity score is formed
-
-The classifier is intentionally lightweight and deterministic. It extracts signals from the latest user prompt and the current context, normalizes them to 0–1, then combines them with configurable weights:
-
-- **Prompt size** - an estimated token count using `characters / 4`, normalized against `maxPromptTokens`.
-- **Context size** - an estimated count including the system prompt, messages, tool-call arguments, and images. This has a deliberately low default weight so a long-running session does not automatically become a powerful-tier request.
-- **Code likelihood** - code-related words and patterns such as fenced code, declarations, file paths, stack traces, and code punctuation.
-- **Reasoning likelihood** - reasoning and evaluation language such as “compare”, “why”, “trade-off”, “root cause”, “design”, and “review”.
-- **Keyword signal** - matches across reasoning, architecture, debugging, performance, and security keyword groups.
-- **Tool signal** - only tools beyond a typical bare Pi coding session baseline (about eight tools) raise this signal. The standard tool set is session state, not prompt difficulty, and does not consume the cheap-tier score budget.
-- **Image signal** - whether images are present. This is normally weighted at zero because image support is enforced separately by backend capability checks.
-
-**Injected skill bodies are excluded.** When a skill is invoked, Pi materializes the full `SKILL.md` into the conversation as a `role: "user"` message wrapped in a `<skill name="...">...</skill>` block. The classifier strips those blocks before scoring, so the request is judged on what the user actually wrote — not on the skill's code samples and reasoning prose. Without this, a long code-heavy skill (for example `frontend-ui-engineering`) would saturate the code and reasoning signals and force otherwise trivial requests onto the powerful tier. The stripping is applied consistently to the prompt, rule matching, and the heuristic score.
-
-When a configured classifier (TypeSafe Jev or an LLM) builds its bounded transcript, the skill body is likewise removed — but replaced with a one-line `[skill invoked: <name>]` marker (mirroring `[image omitted]` / `[tool call: ...]`), so the classifier still knows a skill was invoked without the body eating its per-message character budget.
-
-The weighted result is clamped to 0–1 and, **in heuristic mode** (no classifier configured), compared with `cheapMax`, `simpleMax`, and `mediumMax`. With the defaults, scores up to `0.18` target cheap-code, scores through `0.35` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Cheap-code is additionally reachable at any score through explicit mechanical-task rules. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
-
 ## Install
 
 ### Try it for one session
@@ -108,6 +76,8 @@ If your `~/.pi/agent/settings.json` contains an `enabledModels` allowlist, add t
 Use `pi install -l /path/to/pi-smart-router` only for a project-local installation. Global installs are recorded in `~/.pi/agent/settings.json`; project-local installs are recorded in `.pi/settings.json`.
 
 The extension loads as plain TypeScript (Pi loads extensions via jiti) - no build step. `zod` is a runtime dependency; TypeScript and Vitest are only needed for development.
+
+> **Note:** `pi-smart-router/auto` is a virtual model (never contacted). Its declared 1M context window is only for Pi's UI and compaction — the resolver checks each backend's own window (×0.8) when routing.
 
 ### Selecting the router model
 
@@ -238,6 +208,13 @@ The classifier sees the four-tier rubric, a bounded recent transcript
 failures (timeout, stream error, unparseable answer) route through
 `defaultRoute`/fallbacks — never a heuristic tier. `pi-smart-router/*` refs
 are rejected at config load so the router can never classify into itself.
+
+The heuristic score (used in fallback mode) is computed from the prompt and
+context: estimated tokens, code/reasoning keyword likelihoods, tool and image
+presence, combined with configurable weights. Harness-injected skill bodies
+are stripped before scoring — and in the classifier transcript replaced by a
+`[skill invoked: <name>]` marker — so a SKILL.md cannot inflate the score or
+saturate the classifier's bounded budget.
 
 ```jsonc
 {
