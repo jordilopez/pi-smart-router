@@ -273,24 +273,6 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 > reads `TYPESAFE_API_KEY` from the environment. Set both if you want the tool
 > *and* Jev routing.
 
-## Future upgrades (deliberately not implemented)
-
-The router has no success/failure feedback loop:
-
-- A backend that is unavailable or incompatible is skipped **before streaming** and the normal fallback order is used.
-- Once streaming begins, the selected backend is fixed for the turn. Backend errors are surfaced as stream errors; they are not retried on another route.
-- If a user sends a follow-up, that is a new turn and is classified from the new context. A follow-up such as “find the root cause” may naturally score higher, but that is not escalation memory.
-- A successful response is not validated by the router. It cannot tell whether a code change is correct unless the user or a later tool result makes that visible in a new request.
-
-Policies considered and deliberately left out:
-
-1. **Retry with escalation** - after a pre-output backend failure, retry on the next stronger route (`fast` → `balanced` → `powerful`). This needs safeguards for partial output, duplicate tool calls, cancellation, retry limits, and additional cost. Retrying after partial output is especially risky because the user may already have seen an incomplete answer.
-2. **Cross-turn escalation memory** - remember repeated backend errors, failed tests, or unsuccessful attempts and raise a session's minimum tier for subsequent turns. This would need explicit reset/decay rules so one transient failure does not make every later prompt expensive.
-3. **Signal-based escalation** - promote when a turn reaches a configurable number of tool calls, repeated tool errors, a context-compaction event, or another observable difficulty signal. Tool-call continuations would need a clear policy for whether the current turn can switch models or only the next turn can.
-4. **Model-aware routing** - have either local rules or the classifier evaluate “is this task suitable for model X?” rather than only assigning a generic complexity score. Capability checks would still remain authoritative for context windows, images, reasoning, and output limits.
-
-Until one of these policies is implemented, users should treat the route status as the backend selected **before** the turn starts, not as a live assessment of how well the task is progressing.
-
 ## Route visibility in Pi's UI
 
 - **Footer status** - after each route decision the footer shows the active backend and how the tier was chosen, e.g. `🎯 balanced · <provider>/<balanced-model> · threshold`, `⚡ fast · <provider>/<fast-model> · classifier`, or `💎 powerful · <provider>/<powerful-model> · classifier`. When the classifier reports usage, its cost is appended: `· 742ms/350i/47o`. The heuristic complexity score is intentionally omitted (it does not select the tier when a classifier is configured); it remains in the log line. The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
@@ -334,7 +316,7 @@ The `session=` prefix (first 8 characters of the Pi session id) disambiguates pa
 - Token counts are **heuristics** (`chars/4`, images ≈ 512 tokens); treat thresholds as approximate.
 - `reasoning: "off"` cannot force-disable thinking on providers that always think; it only avoids requesting reasoning. `preserve` keeps the session's thinking level.
 - Backend availability is evaluated when the decision is made; a backend that dies mid-turn surfaces as a stream error (no mid-turn failover).
-- The router does not evaluate answer quality or test outcomes after a turn starts (see [Future upgrades](#future-upgrades-deliberately-not-implemented)).
+- The router does not evaluate answer quality or test outcomes after a turn starts.
 
 ## Development
 
