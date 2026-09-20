@@ -101,12 +101,6 @@ const smartRouterConfigSchema = z.object({
   classifier: classifierSchema.optional(),
   rules: z.array(routingRuleSchema).optional(),
   fallbacks: z.array(z.string().min(1)).optional(),
-  observability: z
-    .object({
-      showRouteStatus: z.boolean().optional(),
-      logDecisions: z.boolean().optional(),
-    })
-    .optional(),
 });
 
 /** Raw parsed + schema-validated config before semantic validation. */

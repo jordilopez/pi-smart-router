@@ -155,9 +155,5 @@
     "fast",
     "cheap-code"
   ],
-  "$comment-fallbacks": "Fallbacks intentionally exclude 'powerful' - must never be reached by accident.",
-  "observability": {
-    "showRouteStatus": true,
-    "logDecisions": false
-  }
+  "$comment-fallbacks": "Fallbacks intentionally exclude 'powerful' - must never be reached by accident."
 }

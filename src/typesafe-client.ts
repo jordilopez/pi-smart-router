@@ -8,7 +8,6 @@
 import type { Context } from "@earendil-works/pi-ai";
 import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
 import { buildTranscript } from "./classifier.js";
-import { debugLog } from "./log.js";
 import { TIER_RUBRIC } from "./types.js";
 import type { PromptFeatures, RouteTier } from "./types.js";
 
@@ -25,8 +24,7 @@ function getClient(): TypeSafeClient | null {
   if (!_client) {
     try {
       _client = new TypeSafeClient({ timeout: 10_000 });
-    } catch (error) {
-      debugLog(`typesafe: failed to create client: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
       return null;
     }
   }
@@ -103,16 +101,11 @@ export async function typesafeClassify(
   options: TypesafeClassifyOptions,
 ): Promise<RouteTier | null> {
   const client = getClient();
-  if (!client) {
-    debugLog("typesafe: client unavailable (no API key or SDK error)");
-    return null;
-  }
+  if (!client) return null;
 
   const state = buildTypesafeClassifierState(context, features);
   const modelName = options.model ?? "jev-latest";
   const timeoutMs = Math.max(1_000, options.timeoutMs);
-
-  debugLog(`typesafe: classifying with model=${modelName} tiers=${ALL_TIERS.join(",")} timeout=${timeoutMs}ms`);
 
   const startedAt = Date.now();
   try {
@@ -120,7 +113,7 @@ export async function typesafeClassify(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const { answers, model, usage } = await client.systemOne(
+      const { answers, usage } = await client.systemOne(
         {
           state,
           questions: {
@@ -144,14 +137,7 @@ export async function typesafeClassify(
       clearTimeout(timer);
 
       const verdict = answers.tier.choice as RouteTier;
-      if (!ALL_TIERS.includes(verdict)) {
-        debugLog(`typesafe: unexpected verdict ${JSON.stringify(verdict)}`);
-        return null;
-      }
-      debugLog(
-        `typesafe: verdict=${verdict} confidence=${answers.tier.confidence.toFixed(3)} model=${model} ` +
-          `tokens=${usage.input_tokens}i/${usage.output_tokens}o elapsedMs=${Date.now() - startedAt}`,
-      );
+      if (!ALL_TIERS.includes(verdict)) return null;
       if (options.stats) {
         options.stats.elapsedMs = Date.now() - startedAt;
         options.stats.inputTokens = usage.input_tokens;
@@ -162,10 +148,8 @@ export async function typesafeClassify(
     } finally {
       clearTimeout(timer);
     }
-  } catch (error) {
+  } catch {
     // All errors (auth, timeout, network, abort, parse) → null
-    const reason = error instanceof Error ? error.constructor.name : typeof error;
-    debugLog(`typesafe: call failed (${reason}) after ${Date.now() - startedAt}ms: ${error instanceof Error ? error.message : String(error)}`);
     if (options.stats) options.stats.elapsedMs = Date.now() - startedAt;
     return null;
   }

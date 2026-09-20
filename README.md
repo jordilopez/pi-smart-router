@@ -13,7 +13,7 @@ pi -e ./src/index.ts
 
 ## The four tiers (recommended policy)
 
-All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer keeps showing `pi-smart-router/auto`; the `[pi-smart-router]` route log line identifies the actual backend used for each turn.
+All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer keeps showing `pi-smart-router/auto`; the footer status line names the backend that actually served each turn.
 
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
@@ -157,10 +157,6 @@ Routes are only resolved when actually selected - backends that don't exist or a
     }
   ],
   "fallbacks": ["fast", "cheap-code"],  // tried in order after defaultRoute; NEVER include "powerful"
-  "observability": {
-    "showRouteStatus": true,          // emit the concise decision log line (route/backend/score/turn)
-    "logDecisions": false             // emit the detailed decision log (adds rule, reason, explanation)
-  }
 }
 ```
 
@@ -262,9 +258,8 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 
 3. Start Pi and confirm the classifier ran: the footer shows
    `… · classifier` (plus `· <ms>/<in>i/<out>o` once the backend reports
-   stats), and the route log line carries `classifier=<tier>`. If you instead
-   see `threshold` in the footer, the router did not find a usable key and fell
-   back to heuristics.
+   stats). If you instead see `threshold` in the footer, the router did not
+   find a usable key and fell back to heuristics.
 
 > **`/typesafe login` is not enough for the router.** The
 > [`pi-typesafe`](https://github.com/DevMortimer/pi-typesafe) extension (`pi
@@ -275,32 +270,9 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 
 ## Route visibility in Pi's UI
 
-- **Footer status** - after each route decision the footer shows the active backend and how the tier was chosen, e.g. `🎯 balanced · <provider>/<balanced-model> · threshold`, `⚡ fast · <provider>/<fast-model> · classifier`, or `💎 powerful · <provider>/<powerful-model> · classifier`. When the classifier reports usage, its cost is appended: `· 742ms/350i/47o`. The heuristic complexity score is intentionally omitted (it does not select the tier when a classifier is configured); it remains in the log line. The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default and does not depend on `logDecisions`.
-- **No transcript noise** - route decisions are intentionally *not* appended to the transcript; the footer status is the single source of that information. For the full detail (reason, explanation, matched rule), check the log file below.
+- **Footer status** - after each route decision the footer shows the active backend and how the tier was chosen, e.g. `🎯 balanced · <provider>/<balanced-model> · threshold`, `⚡ fast · <provider>/<fast-model> · classifier`, or `💎 powerful · <provider>/<powerful-model> · classifier`. When the classifier reports usage, its cost is appended: `· 742ms/350i/47o`. The heuristic complexity score is intentionally omitted (it does not select the tier when a classifier is configured). The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default.
+- **No transcript noise** - route decisions are intentionally *not* appended to the transcript; the footer status is the single source of that information.
 - **Footer model unchanged** - Pi's normal footer model remains `pi-smart-router/auto`; the footer status line above is where you see which backend actually served the turn.
-
-## Observability (log file)
-
-Diagnostics are written to a **log file, never to stdout/stderr** - raw console output from an in-process extension is painted directly over the pi TUI and corrupts the input line. One log line is emitted per route decision (never includes prompt text) and names the **actual backend**. With the default `showRouteStatus: true` the concise line is logged:
-
-```
-[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=<provider>/<balanced-model> score=0.42 turn=3 session=a1b2c3d4
-```
-
-Setting `logDecisions: true` switches to the detailed line, which adds the matched rule, decision reason, and explanation:
-
-```
-[2026-02-14T10:12:33.001Z] [pi-smart-router] route=balanced backend=<provider>/<balanced-model> score=0.42 turn=3 session=a1b2c3d4 rule=- reason=threshold detail="Complexity 0.42 (balanced tier) -> route 'balanced'"
-```
-```
-
-The log file defaults to `<tmpdir>/pi-smart-router.log` (e.g. `/tmp/pi-smart-router.log` on macOS/Linux) and can be redirected with the `PI_SMART_ROUTER_LOG` environment variable (a leading `~` is expanded; `~user` forms are not):
-
-```sh
-PI_SMART_ROUTER_LOG=~/.pi/agent/logs/pi-smart-router.log pi
-```
-
-The `session=` prefix (first 8 characters of the Pi session id) disambiguates parallel pi sessions appending to a shared log file. Config-load diagnostics on `session_start` and config errors are also logged to the file; config errors additionally surface as a `ctx.ui.notify` toast in the TUI, and router-originated stream failures are prefixed with their error code (e.g. `BACKEND_AUTH_MISSING: ...`) in the stream error message. No raw prompt data is ever logged or stored in entries.
 
 ## Troubleshooting
 
