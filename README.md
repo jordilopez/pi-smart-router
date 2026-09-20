@@ -24,7 +24,7 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 **The powerful tier is dramatically more expensive** (an order of magnitude above the other tiers) and is deliberately hard to reach:
 
-- The default `mediumMax` threshold is **0.80**, so only the highest complexity scores reach the powerful tier without explicit rules.
+- The default `mediumMax` threshold is **0.80**, so only the highest complexity scores reach the powerful tier without explicit rules (heuristic mode only — with a classifier configured, the verdict decides).
 - Explicit powerful rules use **high-confidence phrases only** (e.g. "root cause", "race condition", "system design", "security vulnerability", "performance bottleneck", "formal proof") — never generic words like `analyze`, `debug`, `design`, or `implement`.
 - `powerful` is **never** in `fallbacks`; the default fallback chain is `fast` → `cheap-code`.
 - Ordinary code-looking prompts are **not** dumped onto cheap-code; they flow through the score tiers to balanced. The only cheap-code rule is scoped to explicit mechanical-task phrases.
@@ -59,7 +59,7 @@ The classifier is intentionally lightweight and deterministic. It extracts signa
 
 When a configured classifier (TypeSafe Jev or an LLM) builds its bounded transcript, the skill body is likewise removed — but replaced with a one-line `[skill invoked: <name>]` marker (mirroring `[image omitted]` / `[tool call: ...]`), so the classifier still knows a skill was invoked without the body eating its per-message character budget.
 
-The weighted result is clamped to 0–1 and compared with `cheapMax`, `simpleMax`, and `mediumMax`. With the defaults, scores up to `0.18` target cheap-code, scores through `0.35` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Cheap-code is additionally reachable at any score through explicit mechanical-task rules. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
+The weighted result is clamped to 0–1 and, **in heuristic mode** (no classifier configured), compared with `cheapMax`, `simpleMax`, and `mediumMax`. With the defaults, scores up to `0.18` target cheap-code, scores through `0.35` target fast, scores up to `0.80` target balanced, and higher scores target powerful. Cheap-code is additionally reachable at any score through explicit mechanical-task rules. These are approximate signals, not a model's semantic assessment of whether it can solve the task.
 
 ## Install
 
@@ -208,7 +208,7 @@ User keywords in rules are matched as **escaped literal phrases** (case-insensit
 For each new turn (re-classified only on `turn_start`):
 
 1. **Explicit rules**, highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues.
-2. **Complexity thresholds** (cheap → fast → balanced → powerful): score ≤ `cheapMax` (default `0.18`) → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` (default `0.35`) → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. When a classifier is configured, this score-derived tier is skipped entirely and the classifier's verdict (or `defaultRoute` on failure) applies (see below).
+2. **Complexity thresholds — heuristic mode only** (cheap → fast → balanced → powerful): score ≤ `cheapMax` (default `0.18`) → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` (default `0.35`) → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. With a classifier configured this step is skipped entirely: the classifier's verdict replaces the tier (and a transient classifier failure goes to `defaultRoute`, never a heuristic tier) — see below.
 3. **`defaultRoute`**.
 4. **`fallbacks`**, in order.
 5. **Any available route** (declaration order).
