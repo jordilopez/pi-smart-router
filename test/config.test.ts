@@ -127,7 +127,6 @@ describe("validateConfig semantics", () => {
       rules: [{ id: "deep", priority: 10, match: { minComplexity: 0.5 }, route: "fast" }],
       fallbacks: ["fast", "balanced"],
       classifier: { weights: { reasoningLikelihood: 0.4 }, thresholds: { cheapMax: 0.1, simpleMax: 0.25, mediumMax: 0.7 } },
-      observability: { showRouteStatus: true, logDecisions: true },
     };
     expect(() => validateConfig(cfg, "test")).not.toThrow();
   });

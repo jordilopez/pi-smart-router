@@ -38,7 +38,7 @@
       "imageSignal": 0
     },
     "thresholds": {
-      "$comment": "score <= cheapMax -> cheap tier (mimo). Trivial prompts (greetings, quick questions, one-liners) land here; cheap-code is also reachable via mechanical-task rules at any score.",
+      "$comment": "Used in heuristic fallback mode only (no classifier model). score <= cheapMax -> cheap tier. Trivial prompts (greetings, quick questions, one-liners) land here; cheap-code is also reachable via mechanical-task rules at any score.",
       "cheapMax": 0.18,
       "simpleMax": 0.35,
       "mediumMax": 0.8
@@ -155,9 +155,5 @@
     "fast",
     "cheap-code"
   ],
-  "$comment-fallbacks": "Fallbacks intentionally exclude 'powerful' - must never be reached by accident.",
-  "observability": {
-    "showRouteStatus": true,
-    "logDecisions": false
-  }
+  "$comment-fallbacks": "Fallbacks intentionally exclude 'powerful' - must never be reached by accident."
 }

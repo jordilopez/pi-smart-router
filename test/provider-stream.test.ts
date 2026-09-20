@@ -24,7 +24,6 @@ const CONFIG: SmartRouterConfig = {
   },
   // powerful intentionally excluded from fallbacks.
   fallbacks: ["fast", "cheap-code"],
-  observability: { showRouteStatus: false, logDecisions: false },
 };
 
 /** Collect all events from a stream until it terminates. */

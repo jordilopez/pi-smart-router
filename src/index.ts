@@ -12,7 +12,6 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadSmartRouterConfig } from "./config.js";
-import { debugLog } from "./log.js";
 import {
   getRouterState,
   initializeRouter,
@@ -75,17 +74,8 @@ export default function (pi: ExtensionAPI): void {
         // Bound closures only - no whole ExtensionContext is retained.
         setStatus: (key, text) => ctx.ui.setStatus(key, text),
       });
-      // Never console.log here: stdout is owned by the TUI and raw writes
-      // paint over the input line. Diagnostics go to the log file instead
-      // (see log.ts; default <tmpdir>/pi-smart-router.log).
-      debugLog(
-        `config from ${result.sourcePath} (project: ${result.isProjectConfig}); ` +
-          `default route '${result.config.defaultRoute}', routes: ${Object.keys(result.config.routes).join(", ")} ` +
-          `session=${sessionId ? sessionId.slice(0, 8) : "-"}`,
-      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      debugLog(`config load failed: ${message}`);
       // stderr is only safe outside the TUI (print/JSON mode); in the TUI the
       // user is notified through ctx.ui instead.
       if (!ctx.hasUI) console.error(`[pi-smart-router] ${message}`);

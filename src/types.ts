@@ -74,7 +74,7 @@ export type RouteTier = "cheap" | "fast" | "balanced" | "powerful";
  */
 export const TIER_RUBRIC: Record<RouteTier, string> = {
   cheap: "trivial mechanical work: rename, formatting, boilerplate, typo, simple scaffold; no judgement needed",
-  fast: "simple work: factual question, small lookup, small talk, or a trivial one-line edit",
+  fast: "simple work: factual question, small lookup, or a trivial one-line edit",
   balanced: "context-aware judgement or multi-step work: code review, analysis, debugging, design discussion",
   powerful:
     "genuinely hard work: system architecture, security threat modelling, complex debugging, formal reasoning, cross-cutting refactor",
@@ -119,14 +119,6 @@ export interface RoutingRule {
   route: string;
 }
 
-/** Observability options. */
-export interface ObservabilityConfig {
-  /** Emit the concise one-line route decision log (route/backend/score/turn). Default true */
-  showRouteStatus?: boolean;
-  /** Emit the detailed decision log line (adds rule, reason, explanation). Default false */
-  logDecisions?: boolean;
-}
-
 /** Full smart-router configuration (pi-smart-router.json). */
 export interface SmartRouterConfig {
   version: number;
@@ -139,7 +131,6 @@ export interface SmartRouterConfig {
   rules?: RoutingRule[];
   /** Ordered fallback route names tried after defaultRoute */
   fallbacks?: string[];
-  observability?: ObservabilityConfig;
 }
 
 /** Fully-resolved classifier defaults (heuristic weights + optional backend). */
@@ -191,7 +182,6 @@ export const BUILTIN_DEFAULTS: SmartRouterConfig = {
   // Never include "powerful" here: kimi-k3 is an order of magnitude more
   // expensive than the other tiers and must only be reached deliberately.
   fallbacks: ["fast", "cheap-code"],
-  observability: { showRouteStatus: true, logDecisions: false },
 };
 
 // ============================================================================

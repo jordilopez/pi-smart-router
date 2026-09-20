@@ -20,7 +20,6 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { buildStreamOptions, createDelegationModel, delegateToBackend, resolveBackend } from "./backend.js";
 import { classifyPrompt } from "./classifier.js";
 import { isClassifierAvailable, runClassifier } from "./classifier-orchestrator.js";
-import { debugLog } from "./log.js";
 import { classifierThresholds, resolveRoute, tierForScore } from "./route-resolver.js";
 import { ROUTE_EMOJI, RouterError } from "./types.js";
 import type { ClassifierStats } from "./typesafe-client.js";
@@ -307,39 +306,10 @@ export function streamSmartRouter(
         currentRoute = decision;
         cachedUserMessageCount = context.messages.filter((m) => m.role === "user").length;
 
-        // Route decision diagnostics (file sink only - never stdout, raw
-        // writes are painted over the TUI input line). No prompt text is ever
-        // logged. Pi's model footer keeps showing "pi-smart-router/auto"; these
-        // lines name the backend that actually served the turn. The session
-        // prefix disambiguates parallel pi sessions sharing the log file.
-        const baseLine =
-          `route=${decision.route} backend=${decision.backendModel} ` +
-          `score=${features.complexityScore.toFixed(2)} turn=${state.turnNumber}` +
-          ` classifier=${decision.classifierVerdict ?? "-"}` +
-          (decision.classifierStats?.elapsedMs !== undefined
-            ? ` classifyMs=${decision.classifierStats.elapsedMs}` +
-              (decision.classifierStats.inputTokens !== undefined
-                ? ` classifyTok=${decision.classifierStats.inputTokens}i/${decision.classifierStats.outputTokens ?? 0}o`
-                : "")
-            : "") +
-          `${decision.heuristicTier ? ` heuristic=${decision.heuristicTier}` : ""}` +
-          ` session=${state.sessionId ? state.sessionId.slice(0, 8) : "-"}`;
-        const observability = state.config.observability;
-        if (observability?.logDecisions) {
-          // Detailed line: adds the matched rule, decision reason, and
-          // explanation (static resolver text, never prompt content).
-          debugLog(
-            `${baseLine} rule=${decision.matchedRule ?? "-"} reason=${decision.reason} detail="${decision.explanation}"`,
-          );
-        } else if (observability?.showRouteStatus) {
-          debugLog(baseLine);
-        }
-
         // UI visibility: footer status only. Runs only on first
         // classification of the turn (never on tool continuations), and
         // never includes raw prompt text. The reason and any classifier
-        // verdict are included so the last decision is visible without
-        // reading the log file.
+        // verdict are included so the last decision is visible at a glance.
         state.setStatus?.(STATUS_KEY, formatDecisionStatus(decision));
       }
 
@@ -381,10 +351,6 @@ export function streamSmartRouter(
       const code = error instanceof RouterError ? error.code : undefined;
       const message = error instanceof Error ? error.message : String(error);
       const messageWithCode = code ? `${code}: ${message}` : message;
-      if (contentEmitted) {
-        // The user already saw partial output; keep a diagnostic trail.
-        debugLog(`stream failed after content was emitted: ${messageWithCode}`);
-      }
       stream.push({ type: "error", reason: "error", error: makeErrorMessage(model, messageWithCode) });
       stream.end();
     }
