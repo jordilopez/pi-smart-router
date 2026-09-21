@@ -1,13 +1,22 @@
 ---
 name: model-tier-setup
-description: Configures the four-tier routing policy of the pi-smart-router extension. Asks which providers to use, lists their models from the Pi registry, and for each tier asks TypeSafe Jev (via typesafe_evaluate) to pick the best-fitting model from the full candidate list (preferred), then updates the routes section of the global ~/.pi/agent/pi-smart-router.json while preserving rules, classifier, fallbacks, and defaultRoute. Use when setting up or re-targeting smart-router model tiers.
+description: Configures the four-tier routing policy of the pi-smart-router extension. Uses the `smart-router-catalog` tool to retrieve models from the Pi registry and prepare classifier input, and `smart-router-update-routes` to update the config. For each tier, asks TypeSafe Jev (via typesafe_evaluate) to pick the best-fitting model from the candidate list (preferred), then updates the routes section of the global ~/.pi/agent/pi-smart-router.json while preserving rules, classifier, fallbacks, and defaultRoute. Use when setting up or re-targeting smart-router model tiers.
 ---
 
 # Model Tier Setup for pi-smart-router
 
 ## Overview
 
-Configures the four-tier routing policy of the [pi-smart-router](https://github.com/jordilopez/pi-smart-router) extension. The skill asks the user which providers to use, lists each provider's models from the Pi registry, and — preferably with TypeSafe Jev via the `typesafe_evaluate` tool — asks, for each of the four tiers (cheap, fast, balanced, powerful), which candidate model best fits that tier's rubric. It then updates the `routes` section of the **global** config at `~/.pi/agent/pi-smart-router.json`. Everything else in the config (`version`, `defaultRoute`, `classifier`, `rules`, `fallbacks`, `observability`) is preserved untouched.
+Configures the four-tier routing policy of the [pi-smart-router](https://github.com/jordilopez/pi-smart-router) extension. The skill uses two registered tools to automate the manual work:
+
+- **`smart-router-catalog`** — retrieves models from the Pi registry for given provider(s), applies filters (min context, excluded models), and optionally prepares the classifier input (state + questions) for `typesafe_evaluate`.
+- **`smart-router-update-routes`** — updates the `routes` section of the global config at `~/.pi/agent/pi-smart-router.json`, preserving everything else (`version`, `defaultRoute`, `classifier`, `rules`, `fallbacks`, `observability`), and validates the result before writing.
+
+The skill asks the user which providers to use, calls `smart-router-catalog` to get the model list, and — preferably with TypeSafe Jev via the `typesafe_evaluate` tool — asks, for each of the four tiers (cheap, fast, balanced, powerful), which candidate model best fits that tier's rubric. It then calls `smart-router-update-routes` to write the config.
+
+## Prerequisite: the tools must be loaded
+
+The fast path (one catalog call, one config write) requires the pi-smart-router extension to be loaded, so `smart-router-catalog` and `smart-router-update-routes` are in the tool list. If they are not available, **say so explicitly** and either reload/restart Pi or fall back to the manual path (`pi --list-models <provider>`, a hand-built `typesafe_evaluate` request, a hand-edited config validated with `validateConfig`). Never silently take the slow manual path — the user should know why the run is slower.
 
 ## When to Use
 
@@ -43,36 +52,66 @@ Constraints when assigning:
 
 Ask the user which provider(s) to configure (e.g. `hyper`, `deepseek`, `opencode-go`). If the user is unsure, show the providers available from `pi --list-models` (first column). If multiple providers are given, each tier still gets exactly one model overall — ask whether to mix providers per tier or pick a single winning provider.
 
-### Step 2: List models
+### Step 2: List models and build the classifier request (one call)
 
-Run:
+Always pass `prepareClassifier: true` so this single call returns **both** the model list and the Jev classifier input:
 
-```sh
-pi --list-models <provider>
+```typescript
+smart-router-catalog({
+  providers: ["hyper", "opencode-go"],  // provider name(s)
+  minContext: 1000000,                   // optional: minimum context in tokens
+  excludeModels: ["experimental-model"], // optional: model IDs to exclude
+  prepareClassifier: true                // always — builds the Jev request in the same call
+})
 ```
 
-Columns: `provider  model  context  max-out  thinking  images`. Present the model list to the user and let them deselect any models they don't want considered (e.g. experimental snapshots). Ask if any hard filters apply (e.g. a minimum context window, an excluded provider, specific model IDs to skip) and drop non-matching rows from the table immediately — the candidate list handed to Step 3 should already satisfy every hard filter. Keep the table data — context window, max output, thinking, images — as classification evidence.
+The result contains everything the rest of the flow needs:
 
-### Step 3: Classify with Jev (preferred)
+```json
+{
+  "models": [
+    {
+      "provider": "hyper",
+      "model": "glm-5.3-flash",
+      "context": 1000000,
+      "maxOut": 131072,
+      "thinking": true,
+      "images": true
+    }
+  ],
+  "count": 23,
+  "classifierRequest": { "state": { "...": "..." }, "questions": { "...": "..." } }
+}
+```
 
-Ask Jev to pick the best-fitting model **per tier** from the full candidate list, using the `typesafe_evaluate` tool:
+Present the model list and ask — in this same turn — whether any hard filters apply (a minimum context window, excluded model IDs) or specific models should be deselected. Keep the table data — context window, max output, thinking, images — as classification evidence.
 
-- State: one named field per candidate model, keyed by a slug of the model ID (e.g. `{ "glm_53_flash": "hyper/glm-5.3-flash | context 1M, maxOut 131K, thinking yes, images yes", ... }`). Include every shortlisted candidate from every provider being considered.
-- Questions: **one Choice question per tier** — four questions total (`cheap`, `fast`, `balanced`, `powerful`), never one question per model. Each question's `criteria` is the full candidate list (one entry per model, keyed the same as the state field, with a short description as the value); the `instructions` embed that tier's rubric row and ask Jev to pick the single best-fitting model for that tier from the candidates. This lets Jev compare models directly against each other instead of judging each one in isolation.
+- **No changes → do not call `catalog` again.** Go straight to Step 3 with the `classifierRequest` you already hold.
+- **Filters or deselection → re-run `catalog` exactly once**, with the new filters and `prepareClassifier: true`. Use that result for the rest of the flow.
+
+### Step 3: Classify with Jev and present for approval (one turn)
+
+Use the `state` and `questions` from the `classifierRequest` you already hold — do **not** call `catalog` again unless Step 2 changed the pool. Pass them directly to `typesafe_evaluate`.
+
+Key points about the classification:
+- **One Choice question per tier** — four questions total (`cheap`, `fast`, `balanced`, `powerful`), never one question per model. The tool already builds this structure.
 - Respect tool limits: a `choice` question's `criteria` holds at most 64 entries, so up to 64 candidates can be judged per tier in one question; the whole call stays at exactly 4 questions regardless of candidate count. If a provider (or combined shortlist) has more than 64 candidates, ask the user to shortlist first.
 - **Resolve duplicate picks:** because the four tier questions are judged independently, Jev may pick the same model for more than one tier. After getting all four answers, compare `confidence` (or the winning `probabilities` value) across the tiers that collided. Keep the model in the tier where it scored the highest confidence; for each losing tier, take the highest-`probabilities` remaining candidate from that tier's own answer that is not already assigned elsewhere. Repeat until every tier has a distinct model. Never break the `powerful` tier's assignment to resolve a collision elsewhere — resolve the *other* tier instead, per the rubric constraint that `powerful` must stay the most capable choice.
 
 If `typesafe_evaluate` is unavailable or fails (no operator opt-in, no `TYPESAFE_API_KEY`), fall back to classifying the models yourself from the rubric and catalog metadata — and **say explicitly** that Jev was not used and the assignment is your own judgment.
 
-**Tip: sharpening low confidence.** A `choice` question's probability mass spreads across every candidate in its `criteria`, so a large or loosely-related candidate pool naturally dilutes the top score even when there's a real preference. If a tier comes back diffuse (e.g. top pick under ~0.6 confidence with several close competitors), two things reliably sharpen it before you conclude the result is genuinely ambiguous:
-- **Narrow the pool.** Cut each tier's candidate list to the ~5–8 models plausibly suited to it (e.g. use known family/positioning naming — "flash"/"mini"/"haiku" cluster toward `cheap`/`fast`, "sonnet"/"plus"/mid-size params toward `balanced`, "opus"/"pro"/"max" toward `powerful`) instead of feeding the same full list to every tier's question.
-- **Enrich the state.** Add a short, factual positioning clause to each candidate's description beyond the raw spec columns — e.g. "Anthropic's smallest, fastest, cheapest Claude tier" or "DeepSeek's flagship 'Pro' tier of v4, above the Flash variant". This gives Jev real distinguishing signal instead of only `context/maxOut/thinking/images` numbers, which by themselves don't strongly separate reasoning capability.
+**Sharpening rule (conditional and bounded).** After the Jev pass, **accept the assignment iff every tier's confidence is ≥ 0.6 and no two tiers picked the same model.** Otherwise, do **exactly one** narrowed+enriched re-run:
+- **Narrow the pool.** Cut each tier's candidate list to the ~5–8 models plausibly suited to it (family/positioning naming: "flash"/"mini"/"haiku" cluster toward `cheap`/`fast`, "sonnet"/"plus"/mid-size toward `balanced`, "opus"/"pro"/"max" toward `powerful`) instead of feeding the same full list to every tier's question.
+- **Enrich the descriptions.** Add a short, factual positioning clause to each candidate beyond the raw spec columns — e.g. "Anthropic's smallest, fastest, cheapest Claude tier" or "DeepSeek's flagship 'Pro' tier of v4, above the Flash variant". Raw `context/maxOut/thinking/images` numbers alone don't separate reasoning capability.
+- Resolve any collisions by confidence (see above), then re-check the accept condition.
 
-In practice this has taken a 15-candidate run with 0.53–0.67 confidence across all four tiers down to 4–5-candidate runs scoring 0.70–0.97 on three of four tiers, and even flipped a tier's winner to one that better matched general expectations about frontier reasoning models. If a tier still comes back low after narrowing and enriching, treat that as a genuine close contest between comparably-positioned models rather than a signal-quality problem, and report it to the user as such rather than picking arbitrarily.
+If a tier is still below 0.6 after that single re-run, treat it as a **genuine close contest** between comparably-positioned models, not a signal-quality problem: report the top two candidates with their probabilities and let the user pick. Do not loop with further Jev calls.
 
-### Step 4: Confirm with the user
+Then present the proposed assignment (Step 4) and ask for approval **in this same turn** — the Jev call, the assignment table, and the approval prompt are one turn, not three. If the user requests exclusions at approval time, treat that as the pool changing: narrow the pool, re-run Jev once on it, and present again.
 
-Present the proposed assignment as a table before writing anything:
+### Step 4: Confirm with the user (same turn as Step 3)
+
+Present the proposed assignment as a table before writing anything — in the same turn as the Jev call, not a separate turn:
 
 ```
 | Tier      | Route       | Model                     | Rationale                       |
@@ -89,8 +128,28 @@ Get explicit user approval (use `ask_user` if interactive). Flag any tier left u
 
 ### Step 5: Update the global config
 
-1. Read `~/.pi/agent/pi-smart-router.json`. If it doesn't exist, start from the repo example (`examples/pi-smart-router.json`) — but strip every `$comment`, `$comment-model`, and `$comment-fallbacks` key and remove the placeholder routes before writing. Those keys are silently dropped by the validator (the schema is non-strict), but the live config must be plain JSON with no comments (see step 4).
-2. Replace **only** the `routes` section with the four tier routes. Suggested per-tier settings:
+Use the `smart-router-update-routes` tool to update the config:
+
+```typescript
+smart-router-update-routes({
+  routes: {
+    "cheap-code": { "model": "hyper/glm-5.3-flash", "reasoning": "low", "emoji": "🪙" },
+    "fast": { "model": "hyper/deepseek-v4.1-flash", "reasoning": "low", "emoji": "⚡" },
+    "balanced": { "model": "hyper/qwen3.7-plus", "reasoning": "low", "emoji": "🎯" },
+    "powerful": { "model": "hyper/deepseek-v4-pro", "reasoning": "high", "emoji": "💎" }
+  }
+})
+```
+
+The tool:
+1. **Validates the models first.** It resolves each route's `provider/modelId` against the model registry and **refuses to write** if any model is unknown or malformed (`provider/modelId` format required). A typo or hallucinated model ID is rejected with an error naming the offending route.
+2. Reads `~/.pi/agent/pi-smart-router.json` (or starts from the bundled example if it doesn't exist, stripping `$comment` keys and placeholder routes)
+3. Replaces **only** the `routes` section with the provided routes
+4. Validates the result (version is 1, defaultRoute exists in routes, every rule's route still exists)
+5. Writes the file with valid JSON (2-space indent, trailing newline)
+6. **Warns about project config shadowing.** If `<cwd>/.pi/pi-smart-router.json` exists, the result carries a `warning` in its details — that project config shadows the global one in trusted projects, so the update won't apply there until it is updated too. Surface this warning to the user.
+
+Suggested per-tier settings:
 
 ```jsonc
 {
@@ -103,21 +162,19 @@ Get explicit user approval (use `ask_user` if interactive). Flag any tier left u
 
    - `reasoning`: set it from the model's `thinking` column. If `thinking=no`, use `"preserve"` (or omit the field). If `thinking=yes`, use `"high"` for `powerful` and `"low"` for cheap/fast/balanced. If a provider rejects `low`/`high` at request time, fall back to `"preserve"`. `"off"` cannot force-disable thinking on providers that always think, so prefer `"preserve"` over `"off"`.
    - If the model reports no image support and the user works with images, warn them (the router enforces image compatibility per route).
-3. Keep `defaultRoute: "balanced"`, `fallbacks` (never add `powerful` to fallbacks), `classifier`, `rules`, and `version: 1` exactly as they were.
-4. Write the file with valid JSON (2-space indent, trailing newline). Do not add comments — the file is plain JSON.
-5. Validate: re-read the file, confirm it parses (`node -e "JSON.parse(require('fs').readFileSync(process.env.HOME + '/.pi/agent/pi-smart-router.json'))"`), `version` is `1`, `defaultRoute` exists in `routes`, and every rule's `route` still exists.
-6. **Confirm the router is selectable.** If `~/.pi/agent/settings.json` has an `enabledModels` allowlist, it gates the `/model` selector (which models show up when you cycle), *not* the router's backend resolution — backends resolve via `registry.find()` on the full registry regardless of `enabledModels`. Only `pi-smart-router/auto` *must* be listed for you to select the router as your session model. Listing the four backend models is optional; it only lets you `/model` directly to a backend for manual testing. Do not claim routing breaks without them.
+3. The tool preserves `defaultRoute: "balanced"`, `fallbacks` (never add `powerful` to fallbacks), `classifier`, `rules`, and `version: 1` exactly as they were.
+4. **Confirm the router is selectable.** If `~/.pi/agent/settings.json` has an `enabledModels` allowlist, it gates the `/model` selector (which models show up when you cycle), *not* the router's backend resolution — backends resolve via `registry.find()` on the full registry regardless of `enabledModels`. Only `pi-smart-router/auto` *must* be listed for you to select the router as your session model. Listing the four backend models is optional; it only lets you `/model` directly to a backend for manual testing. Do not claim routing breaks without them.
 
-### Step 6: Report
+### Step 6: Report (same turn as Step 5)
 
-Summarize: which tiers changed, which kept their model, any tier left unfilled, whether the router is selectable (`pi-smart-router/auto` already present / added to the allowlist / no allowlist present), and remind the user to restart Pi (or reload the extension) for the change to take effect.
+Summarize — in the same turn as the `smart-router-update-routes` call, not a separate turn — which tiers changed, which kept their model, any tier left unfilled, whether the router is selectable (`pi-smart-router/auto` already present / added to the allowlist / no allowlist present), and remind the user to restart Pi (or reload the extension) for the change to take effect.
 
 ## Failure Modes to Avoid
 
 - **Do not touch** `rules`, `classifier`, `fallbacks`, or `defaultRoute` — routes only.
 - Never put `powerful` in `fallbacks`.
 - Never assign the same model to two tiers.
-- Never invent model IDs — copy them exactly (lowercase) from `pi --list-models`.
+- Never invent model IDs — copy them exactly (lowercase) from `pi --list-models` / `smart-router-catalog` output. `smart-router-update-routes` now enforces this by validating each model against the registry and refusing to write unknown IDs.
 - Never ask Jev one question per model with tiers as the criteria — that judges each model in isolation and can't compare candidates against each other. Always ask one question per tier with the candidate models as criteria.
 - If two tiers' Jev picks collide on the same model, resolve by confidence as described in Step 3 — never leave two tiers pointing at the same model.
 - Never overwrite the config without showing the user the proposed assignment first.
