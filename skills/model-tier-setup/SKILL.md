@@ -1,13 +1,13 @@
 ---
 name: model-tier-setup
-description: Configures the four-tier routing policy of the pi-smart-router extension. Asks which providers to use, lists their models from the Pi registry, classifies each candidate model into cheap, fast, balanced, or powerful (preferably with TypeSafe Jev via typesafe_evaluate), and updates the routes section of the global ~/.pi/agent/pi-smart-router.json while preserving rules, classifier, fallbacks, and defaultRoute. Use when setting up or re-targeting smart-router model tiers.
+description: Configures the four-tier routing policy of the pi-smart-router extension. Asks which providers to use, lists their models from the Pi registry, and for each tier asks TypeSafe Jev (via typesafe_evaluate) to pick the best-fitting model from the full candidate list (preferred), then updates the routes section of the global ~/.pi/agent/pi-smart-router.json while preserving rules, classifier, fallbacks, and defaultRoute. Use when setting up or re-targeting smart-router model tiers.
 ---
 
 # Model Tier Setup for pi-smart-router
 
 ## Overview
 
-Configures the four-tier routing policy of the [pi-smart-router](https://github.com/jordilopez/pi-smart-router) extension. The skill asks the user which providers to use, lists each provider's models from the Pi registry, classifies every candidate model into one of the four tiers (cheap, fast, balanced, powerful) — preferably with TypeSafe Jev via the `typesafe_evaluate` tool — and updates the `routes` section of the **global** config at `~/.pi/agent/pi-smart-router.json`. Everything else in the config (`version`, `defaultRoute`, `classifier`, `rules`, `fallbacks`, `observability`) is preserved untouched.
+Configures the four-tier routing policy of the [pi-smart-router](https://github.com/jordilopez/pi-smart-router) extension. The skill asks the user which providers to use, lists each provider's models from the Pi registry, and — preferably with TypeSafe Jev via the `typesafe_evaluate` tool — asks, for each of the four tiers (cheap, fast, balanced, powerful), which candidate model best fits that tier's rubric. It then updates the `routes` section of the **global** config at `~/.pi/agent/pi-smart-router.json`. Everything else in the config (`version`, `defaultRoute`, `classifier`, `rules`, `fallbacks`, `observability`) is preserved untouched.
 
 ## When to Use
 
@@ -35,6 +35,7 @@ Constraints when assigning:
 - Each of the four tiers gets **exactly one** model; the same model must **not** serve two tiers.
 - `powerful` must be the most capable model; if a provider has fewer than four distinct models, leave the weakest tiers to another provider or ask the user how to proceed — never downgrade `powerful` to fill `cheap`.
 - Image support (`images: yes`) is a plus for `balanced` but never the deciding factor.
+- The user may set hard filters before classification (e.g. "only consider models with ≥1M context", exclude a provider, exclude specific model IDs). Apply these as an exclusion pass on the candidate table in Step 2 — drop non-matching rows entirely before Step 3 runs, rather than letting Jev pick a candidate that gets rejected afterward. If applying a new filter invalidates an existing route (e.g. a previously-chosen model now falls under the context floor), re-run Step 3 for just that tier with the filtered candidate list; the other tiers don't need to be re-classified unless the filter affects them too.
 
 ## Workflow
 
@@ -50,17 +51,24 @@ Run:
 pi --list-models <provider>
 ```
 
-Columns: `provider  model  context  max-out  thinking  images`. Present the model list to the user and let them deselect any models they don't want considered (e.g. experimental snapshots). Keep the table data — context window, max output, thinking, images — as classification evidence.
+Columns: `provider  model  context  max-out  thinking  images`. Present the model list to the user and let them deselect any models they don't want considered (e.g. experimental snapshots). Ask if any hard filters apply (e.g. a minimum context window, an excluded provider, specific model IDs to skip) and drop non-matching rows from the table immediately — the candidate list handed to Step 3 should already satisfy every hard filter. Keep the table data — context window, max output, thinking, images — as classification evidence.
 
 ### Step 3: Classify with Jev (preferred)
 
-Classify **each model** into a tier using the `typesafe_evaluate` tool:
+Ask Jev to pick the best-fitting model **per tier** from the full candidate list, using the `typesafe_evaluate` tool:
 
-- State: one named field per model, keyed by a slug of the model ID (e.g. `{ "glm_53_flash": "hyper/glm-5.3-flash | context 1M, maxOut 131K, thinking yes, images yes", ... }`).
-- Questions: **one Choice question per model** (never aggregate several models into one question). The criteria are the four tiers `cheap`, `fast`, `balanced`, `powerful`; the instructions embed the tier rubric above and name the state field being judged.
-- Respect tool limits: max 32 questions per call — batch in groups of ≤32; if a provider has more than 32 candidate models, ask the user to shortlist first.
+- State: one named field per candidate model, keyed by a slug of the model ID (e.g. `{ "glm_53_flash": "hyper/glm-5.3-flash | context 1M, maxOut 131K, thinking yes, images yes", ... }`). Include every shortlisted candidate from every provider being considered.
+- Questions: **one Choice question per tier** — four questions total (`cheap`, `fast`, `balanced`, `powerful`), never one question per model. Each question's `criteria` is the full candidate list (one entry per model, keyed the same as the state field, with a short description as the value); the `instructions` embed that tier's rubric row and ask Jev to pick the single best-fitting model for that tier from the candidates. This lets Jev compare models directly against each other instead of judging each one in isolation.
+- Respect tool limits: a `choice` question's `criteria` holds at most 64 entries, so up to 64 candidates can be judged per tier in one question; the whole call stays at exactly 4 questions regardless of candidate count. If a provider (or combined shortlist) has more than 64 candidates, ask the user to shortlist first.
+- **Resolve duplicate picks:** because the four tier questions are judged independently, Jev may pick the same model for more than one tier. After getting all four answers, compare `confidence` (or the winning `probabilities` value) across the tiers that collided. Keep the model in the tier where it scored the highest confidence; for each losing tier, take the highest-`probabilities` remaining candidate from that tier's own answer that is not already assigned elsewhere. Repeat until every tier has a distinct model. Never break the `powerful` tier's assignment to resolve a collision elsewhere — resolve the *other* tier instead, per the rubric constraint that `powerful` must stay the most capable choice.
 
 If `typesafe_evaluate` is unavailable or fails (no operator opt-in, no `TYPESAFE_API_KEY`), fall back to classifying the models yourself from the rubric and catalog metadata — and **say explicitly** that Jev was not used and the assignment is your own judgment.
+
+**Tip: sharpening low confidence.** A `choice` question's probability mass spreads across every candidate in its `criteria`, so a large or loosely-related candidate pool naturally dilutes the top score even when there's a real preference. If a tier comes back diffuse (e.g. top pick under ~0.6 confidence with several close competitors), two things reliably sharpen it before you conclude the result is genuinely ambiguous:
+- **Narrow the pool.** Cut each tier's candidate list to the ~5–8 models plausibly suited to it (e.g. use known family/positioning naming — "flash"/"mini"/"haiku" cluster toward `cheap`/`fast`, "sonnet"/"plus"/mid-size params toward `balanced`, "opus"/"pro"/"max" toward `powerful`) instead of feeding the same full list to every tier's question.
+- **Enrich the state.** Add a short, factual positioning clause to each candidate's description beyond the raw spec columns — e.g. "Anthropic's smallest, fastest, cheapest Claude tier" or "DeepSeek's flagship 'Pro' tier of v4, above the Flash variant". This gives Jev real distinguishing signal instead of only `context/maxOut/thinking/images` numbers, which by themselves don't strongly separate reasoning capability.
+
+In practice this has taken a 15-candidate run with 0.53–0.67 confidence across all four tiers down to 4–5-candidate runs scoring 0.70–0.97 on three of four tiers, and even flipped a tier's winner to one that better matched general expectations about frontier reasoning models. If a tier still comes back low after narrowing and enriching, treat that as a genuine close contest between comparably-positioned models rather than a signal-quality problem, and report it to the user as such rather than picking arbitrarily.
 
 ### Step 4: Confirm with the user
 
@@ -110,5 +118,8 @@ Summarize: which tiers changed, which kept their model, any tier left unfilled, 
 - Never put `powerful` in `fallbacks`.
 - Never assign the same model to two tiers.
 - Never invent model IDs — copy them exactly (lowercase) from `pi --list-models`.
+- Never ask Jev one question per model with tiers as the criteria — that judges each model in isolation and can't compare candidates against each other. Always ask one question per tier with the candidate models as criteria.
+- If two tiers' Jev picks collide on the same model, resolve by confidence as described in Step 3 — never leave two tiers pointing at the same model.
 - Never overwrite the config without showing the user the proposed assignment first.
+- Never let a candidate that fails a user-specified hard filter (e.g. below a minimum context window) reach a Jev question or the final config — filter the candidate list first, in Step 2.
 - Project config (`<project>/.pi/pi-smart-router.json`) replaces the global one entirely — if one exists for the current project, warn the user that it will shadow the global config.
