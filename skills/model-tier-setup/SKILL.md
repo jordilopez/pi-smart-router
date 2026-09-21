@@ -1,13 +1,13 @@
 ---
 name: model-tier-setup
-description: Configures the four-tier routing policy of the pi-smart-router extension. Asks which providers to use, lists their models from the Pi registry, classifies each candidate model into cheap, fast, balanced, or powerful (preferably with TypeSafe Jev via typesafe_evaluate), and updates the routes section of the global ~/.pi/agent/pi-smart-router.json while preserving rules, classifier, fallbacks, and defaultRoute. Use when setting up or re-targeting smart-router model tiers.
+description: Configures the four-tier routing policy of the pi-smart-router extension. Asks which providers to use, lists their models from the Pi registry, and for each tier asks TypeSafe Jev (via typesafe_evaluate) to pick the best-fitting model from the full candidate list (preferred), then updates the routes section of the global ~/.pi/agent/pi-smart-router.json while preserving rules, classifier, fallbacks, and defaultRoute. Use when setting up or re-targeting smart-router model tiers.
 ---
 
 # Model Tier Setup for pi-smart-router
 
 ## Overview
 
-Configures the four-tier routing policy of the [pi-smart-router](https://github.com/jordilopez/pi-smart-router) extension. The skill asks the user which providers to use, lists each provider's models from the Pi registry, classifies every candidate model into one of the four tiers (cheap, fast, balanced, powerful) — preferably with TypeSafe Jev via the `typesafe_evaluate` tool — and updates the `routes` section of the **global** config at `~/.pi/agent/pi-smart-router.json`. Everything else in the config (`version`, `defaultRoute`, `classifier`, `rules`, `fallbacks`, `observability`) is preserved untouched.
+Configures the four-tier routing policy of the [pi-smart-router](https://github.com/jordilopez/pi-smart-router) extension. The skill asks the user which providers to use, lists each provider's models from the Pi registry, and — preferably with TypeSafe Jev via the `typesafe_evaluate` tool — asks, for each of the four tiers (cheap, fast, balanced, powerful), which candidate model best fits that tier's rubric. It then updates the `routes` section of the **global** config at `~/.pi/agent/pi-smart-router.json`. Everything else in the config (`version`, `defaultRoute`, `classifier`, `rules`, `fallbacks`, `observability`) is preserved untouched.
 
 ## When to Use
 
@@ -54,11 +54,12 @@ Columns: `provider  model  context  max-out  thinking  images`. Present the mode
 
 ### Step 3: Classify with Jev (preferred)
 
-Classify **each model** into a tier using the `typesafe_evaluate` tool:
+Ask Jev to pick the best-fitting model **per tier** from the full candidate list, using the `typesafe_evaluate` tool:
 
-- State: one named field per model, keyed by a slug of the model ID (e.g. `{ "glm_53_flash": "hyper/glm-5.3-flash | context 1M, maxOut 131K, thinking yes, images yes", ... }`).
-- Questions: **one Choice question per model** (never aggregate several models into one question). The criteria are the four tiers `cheap`, `fast`, `balanced`, `powerful`; the instructions embed the tier rubric above and name the state field being judged.
-- Respect tool limits: max 32 questions per call — batch in groups of ≤32; if a provider has more than 32 candidate models, ask the user to shortlist first.
+- State: one named field per candidate model, keyed by a slug of the model ID (e.g. `{ "glm_53_flash": "hyper/glm-5.3-flash | context 1M, maxOut 131K, thinking yes, images yes", ... }`). Include every shortlisted candidate from every provider being considered.
+- Questions: **one Choice question per tier** — four questions total (`cheap`, `fast`, `balanced`, `powerful`), never one question per model. Each question's `criteria` is the full candidate list (one entry per model, keyed the same as the state field, with a short description as the value); the `instructions` embed that tier's rubric row and ask Jev to pick the single best-fitting model for that tier from the candidates. This lets Jev compare models directly against each other instead of judging each one in isolation.
+- Respect tool limits: a `choice` question's `criteria` holds at most 64 entries, so up to 64 candidates can be judged per tier in one question; the whole call stays at exactly 4 questions regardless of candidate count. If a provider (or combined shortlist) has more than 64 candidates, ask the user to shortlist first.
+- **Resolve duplicate picks:** because the four tier questions are judged independently, Jev may pick the same model for more than one tier. After getting all four answers, compare `confidence` (or the winning `probabilities` value) across the tiers that collided. Keep the model in the tier where it scored the highest confidence; for each losing tier, take the highest-`probabilities` remaining candidate from that tier's own answer that is not already assigned elsewhere. Repeat until every tier has a distinct model. Never break the `powerful` tier's assignment to resolve a collision elsewhere — resolve the *other* tier instead, per the rubric constraint that `powerful` must stay the most capable choice.
 
 If `typesafe_evaluate` is unavailable or fails (no operator opt-in, no `TYPESAFE_API_KEY`), fall back to classifying the models yourself from the rubric and catalog metadata — and **say explicitly** that Jev was not used and the assignment is your own judgment.
 
@@ -110,5 +111,7 @@ Summarize: which tiers changed, which kept their model, any tier left unfilled, 
 - Never put `powerful` in `fallbacks`.
 - Never assign the same model to two tiers.
 - Never invent model IDs — copy them exactly (lowercase) from `pi --list-models`.
+- Never ask Jev one question per model with tiers as the criteria — that judges each model in isolation and can't compare candidates against each other. Always ask one question per tier with the candidate models as criteria.
+- If two tiers' Jev picks collide on the same model, resolve by confidence as described in Step 3 — never leave two tiers pointing at the same model.
 - Never overwrite the config without showing the user the proposed assignment first.
 - Project config (`<project>/.pi/pi-smart-router.json`) replaces the global one entirely — if one exists for the current project, warn the user that it will shadow the global config.
