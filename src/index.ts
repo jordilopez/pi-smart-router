@@ -19,6 +19,7 @@ import {
   shutdownRouter,
   streamSmartRouter,
 } from "./provider.js";
+import { registerTools } from "./tools.js";
 
 /**
  * The single registered router model.
@@ -54,6 +55,9 @@ export default function (pi: ExtensionAPI): void {
     models: ROUTER_MODELS,
     streamSimple: streamSmartRouter,
   });
+
+  // Register tools for the model-tier-setup skill
+  registerTools(pi);
 
   pi.on("session_start", async (_event, ctx) => {
     const trusted = ctx.isProjectTrusted();

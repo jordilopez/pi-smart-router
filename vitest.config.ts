@@ -9,12 +9,17 @@ const PIAI_COMPAT = path.join(
   PI_PACKAGE_DIR,
   "node_modules/@earendil-works/pi-ai/dist/compat.js",
 );
+const PITUI = path.join(
+  PI_PACKAGE_DIR,
+  "node_modules/@earendil-works/pi-tui/dist/index.js",
+);
 
 export default defineConfig({
   resolve: {
     alias: [
       { find: /^@earendil-works\/pi-ai$/, replacement: PIAI_COMPAT },
       { find: /^@earendil-works\/pi-ai\/compat$/, replacement: PIAI_COMPAT },
+      { find: /^@earendil-works\/pi-tui$/, replacement: PITUI },
     ],
   },
   test: {
