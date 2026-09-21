@@ -266,7 +266,9 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 > install npm:pi-typesafe`) stores its key in `~/.pi/agent/pi-typesafe/auth.json`
 > and is only needed for its own `typesafe_evaluate` tool. The router always
 > reads `TYPESAFE_API_KEY` from the environment. Set both if you want the tool
-> *and* Jev routing.
+> *and* Jev routing. To enable the `typesafe_evaluate` tool by default in every
+> new session (no `/typesafe enable` prompt), export `PI_TYPESAFE_ENABLED=1` in
+> your shell.
 
 ## Route visibility in Pi's UI
 
