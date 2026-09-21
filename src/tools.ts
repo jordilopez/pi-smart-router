@@ -128,13 +128,40 @@ const TIER_NAME_HINTS: Record<RouteTier, RegExp[]> = {
   powerful: [/pro/i, /max/i, /opus/i, /ultra/i],
 };
 
-/** Short factual positioning clause derived from the model's family naming. */
-function positioningClause(m: CatalogModel): string {
-  if (/pro|max|opus|ultra/i.test(m.model)) return "flagship/reasoning tier of its family";
-  if (/plus|sonnet/i.test(m.model)) return "mid-size tier of its family";
-  if (/flash|mini|lite|nano|haiku|air/i.test(m.model)) return "lightweight, fast tier of its family";
-  if (/thinking/i.test(m.model)) return "reasoning-focused variant";
-  return "";
+/**
+ * Short factual positioning clause derived from the model's family naming.
+ * Covers common model families so that Jev can distinguish candidates that
+ * share the same raw specs (context, maxOut, thinking, images).
+ *
+ * Family-level checks come first so that model-family names containing
+ * tier-like substrings (e.g. "mini" inside "minimax") are matched by
+ * family before they hit the generic tier patterns.
+ * When both a family and a tier pattern match, the clause is composed from
+ * both parts (e.g. "DeepSeek model; flagship/reasoning tier").
+ */
+export function positioningClause(m: CatalogModel): string {
+  // --- Family-level identification first (avoids substring collisions) ---
+  let family = "";
+  if (/^deepseek/i.test(m.model)) family = "DeepSeek model";
+  else if (/^glm/i.test(m.model)) family = "Zhipu GLM model";
+  else if (/^gemma/i.test(m.model)) family = "Google open-weight Gemma family model";
+  else if (/^qwen/i.test(m.model)) family = "Alibaba Qwen model";
+  else if (/^kimi/i.test(m.model)) family = "Moonshot Kimi model";
+  else if (/^minimax/i.test(m.model)) family = "MiniMax model";
+  else if (/^gpt-?oss/i.test(m.model)) family = "OpenAI open-weight GPT-OSS model";
+  else if (/^gpt/i.test(m.model)) family = "OpenAI GPT-family model";
+
+  // --- Tier-level patterns (generic across families) ---
+  let tier = "";
+  if (/pro|opus|ultra/i.test(m.model)) tier = "flagship/reasoning tier";
+  else if (/\bmax\b/i.test(m.model)) tier = "largest/most-capable variant";
+  else if (/plus|sonnet/i.test(m.model)) tier = "mid-size tier";
+  else if (/\bflash\b|\bmini\b|\blite\b|\bnano\b|\bhaiku\b|\bair\b/i.test(m.model)) tier = "lightweight, fast tier";
+  else if (/thinking/i.test(m.model)) tier = "reasoning-focused variant";
+
+  if (family && tier) return `${family}; ${tier}`;
+  if (family) return family;
+  return tier;
 }
 
 /** Capability order: thinking models first, then larger context, then larger output. */
@@ -164,6 +191,35 @@ export function narrowPool(tier: RouteTier, models: CatalogModel[]): CatalogMode
 }
 
 /**
+ * Tier-specific instruction templates that tell Jev *how* to compare candidates
+ * (not just *what* the tier is for). Each template weaves the rubric text with
+ * prioritization guidance and negative constraints.
+ */
+const TIER_INSTRUCTIONS: Record<RouteTier, string> = {
+  cheap: 'Which model best fits the "cheap" tier? ${RUBRIC}. This tier is cost-sensitive: prefer the cheapest model that can handle trivial tasks. Do not pick a flagship, reasoning-heavy, or otherwise over-powered model.',
+  fast: 'Which model best fits the "fast" tier? ${RUBRIC}. This tier values low latency: prefer the fastest, most responsive model for simple lookups and small edits. Do not pick a heavy reasoning or flagship model.',
+  balanced: 'Which model best fits the "balanced" tier? ${RUBRIC}. This is the everyday workhorse: prefer general-purpose capability; image support is a useful tiebreak.',
+  powerful: 'Which model best fits the "powerful" tier? ${RUBRIC}. This is the strongest tier: prefer the model with the best reasoning capability; cost is secondary. Do not pick a lightweight or fast-only model.',
+};
+
+/**
+ * Ordinal rank label for a model within a tier's candidate pool.
+ * Cheap/fast tiers rank by blended cost (cheapest = rank 0).
+ * Balanced/powerful tiers rank by capability (strongest = rank 0).
+ */
+function rankLabel(rank: number, tier: RouteTier): string {
+  if (rank === 0) {
+    return tier === "cheap" || tier === "fast"
+      ? "(cheapest in pool)"
+      : "(most capable in pool)";
+  }
+  const suffix = ["2nd", "3rd", "4th", "5th", "6th", "7th", "8th"][rank - 1] ?? `${rank + 1}th`;
+  return tier === "cheap" || tier === "fast"
+    ? `(${suffix} cheapest in pool)`
+    : `(${suffix} most capable in pool)`;
+}
+
+/**
  * Prepare the typesafe_evaluate request for tier classification.
  *
  * Builds one Choice question per tier (4 total).
@@ -174,37 +230,64 @@ export function narrowPool(tier: RouteTier, models: CatalogModel[]): CatalogMode
  * criteria to hold the options to choose from.
  *
  * With `narrow: true` each tier's criteria is cut to ≤ 8 plausible fits
- * (family/positioning naming) and each description gains a short positioning
- * clause, which sharpens the first Jev pass so the skill's bounded re-run
- * rarely triggers.
+ * (family/positioning naming), each description gains a short positioning
+ * clause and an ordinal capability/cost rank, which sharpens the first Jev
+ * pass so the skill's bounded re-run rarely triggers.
  */
 export function prepareClassifierRequest(models: CatalogModel[], narrow = false) {
-  const descriptions = new Map<string, string>();
+  // Base descriptions: positioning clause when narrow, plain when not.
+  const baseDescriptions = new Map<string, string>();
   for (const m of models) {
-    descriptions.set(slugify(`${m.provider}/${m.model}`),
-      narrow ? modelDescription(m, positioningClause(m)) : modelDescription(m));
+    baseDescriptions.set(
+      slugify(`${m.provider}/${m.model}`),
+      narrow ? modelDescription(m, positioningClause(m)) : modelDescription(m),
+    );
   }
-  const allDescriptions = Object.fromEntries(descriptions);
   const hasPricing = models.some(hasCost);
-
-  const questions: Record<string, any> = {};
   const tiers: RouteTier[] = ["cheap", "fast", "balanced", "powerful"];
 
+  // When narrow, each tier gets its own description variants with rank labels,
+  // because the rank is per-tier (different pool per tier).
+  // When not narrow, all tiers share the same descriptions.
+  const state: Record<string, string> = Object.fromEntries(baseDescriptions);
+  const questions: Record<string, any> = {};
+
   for (const tier of tiers) {
-    const criteria = narrow
-      ? Object.fromEntries(narrowPool(tier, models).map((m) => [slugify(`${m.provider}/${m.model}`), descriptions.get(slugify(`${m.provider}/${m.model}`))!]))
-      : allDescriptions;
+    let criteria: Record<string, string>;
+    if (narrow) {
+      const pool = narrowPool(tier, models);
+      // Rank the pool: cheap/fast by cost asc, balanced/powerful by capability desc.
+      const ranked = tier === "cheap" || tier === "fast"
+        ? [...pool].sort((a, b) => {
+            const pa = hasCost(a) ? (a.costIn! + a.costOut!) : Infinity;
+            const pb = hasCost(b) ? (b.costIn! + b.costOut!) : Infinity;
+            return pa === pb ? a.maxOut - b.maxOut : pa - pb;
+          })
+        : [...pool].sort(byCapability); // strongest first; rank 0 = most capable
+      criteria = {};
+      for (const [i, m] of ranked.entries()) {
+        const key = slugify(`${m.provider}/${m.model}`);
+        const base = baseDescriptions.get(key)!;
+        criteria[key] = `${base} ${rankLabel(i, tier)}`;
+        // Merge ranked description into state so all tiers' ranks are visible.
+        state[key] = criteria[key];
+      }
+    } else {
+      criteria = state;
+    }
+
+    const rubric = TIER_RUBRIC[tier];
     const costClause = hasPricing && (tier === "cheap" || tier === "fast")
-      ? " This tier is cost-sensitive: among the candidates that can still do the job, prefer the lowest per-token price."
+      ? " Among the candidates that can still do the job, prefer the lowest per-token price."
       : "";
     questions[tier] = {
       type: "choice",
-      instructions: `Which model best fits the "${tier}" tier? ${TIER_RUBRIC[tier]}. Pick the single best-fitting model from the candidates.${costClause}`,
+      instructions: `${TIER_INSTRUCTIONS[tier].replace("${RUBRIC}", rubric)}${costClause} Pick the single best-fitting model from the candidates.`,
       criteria,
     };
   }
 
-  return { state: allDescriptions, questions };
+  return { state, questions };
 }
 
 /**

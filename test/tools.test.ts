@@ -4,6 +4,7 @@ import {
   narrowPool,
   parseModelsTable,
   parseTokenValue,
+  positioningClause,
   prepareClassifierRequest,
   slugify,
   validateRouteModels,
@@ -206,9 +207,10 @@ describe("pricing (cost-aware cheap/fast)", () => {
     ];
     const { questions } = prepareClassifierRequest(withPricing);
     expect(questions.cheap.instructions).toContain("cost-sensitive");
-    expect(questions.fast.instructions).toContain("cost-sensitive");
-    expect(questions.balanced.instructions).not.toContain("cost-sensitive");
-    expect(questions.powerful.instructions).not.toContain("cost-sensitive");
+    // Fast is latency-driven; the per-token price clause is still added when pricing exists.
+    expect(questions.fast.instructions).toContain("per-token price");
+    expect(questions.balanced.instructions).not.toContain("per-token price");
+    expect(questions.powerful.instructions).not.toContain("per-token price");
     // state carries the price
     expect(questions.cheap.criteria["hyper_a_flash"]).toContain("$0.1");
   });
@@ -218,7 +220,165 @@ describe("pricing (cost-aware cheap/fast)", () => {
       { provider: "hyper", model: "a-flash", context: 1_000_000, maxOut: 64_000, thinking: true, images: true },
     ];
     const { questions } = prepareClassifierRequest(noPricing);
-    expect(questions.cheap.instructions).not.toContain("cost-sensitive");
+    // The per-token price comparison is only added when pricing data exists.
+    expect(questions.cheap.instructions).not.toContain("per-token price");
+    expect(questions.fast.instructions).not.toContain("per-token price");
+  });
+});
+
+describe("positioningClause (family coverage)", () => {
+  // Task 6: previously-uncovered families now get factual positioning.
+  const families: Array<[string, string]> = [
+    ["deepseek-v4", "DeepSeek"],
+    ["glm-5.3", "Zhipu GLM"],
+    ["gemma-4-26b", "Gemma"],
+    ["qwen3.8", "Qwen"],
+    ["kimi-k2", "Kimi"],
+    ["minimax-m2.7", "MiniMax"],
+    ["gpt-oss-120b", "GPT-OSS"],
+    ["gpt-5", "GPT"],
+  ];
+
+  for (const [modelName, family] of families) {
+    it(`gives ${family} a positioning clause`, () => {
+      const m: CatalogModel = {
+        provider: "hyper", model: modelName, context: 1_000_000, maxOut: 128_000,
+        thinking: true, images: true,
+      };
+      const desc = modelDescription(m, positioningClause(m));
+      // The description includes the family name via the positioning clause.
+      expect(desc).toContain(family);
+    });
+  }
+});
+
+describe("tier-specific instructions (Task 7)", () => {
+  const models: CatalogModel[] = [
+    { provider: "hyper", model: "a-flash", context: 1_000_000, maxOut: 64_000, thinking: true, images: true },
+    { provider: "hyper", model: "b-pro", context: 1_000_000, maxOut: 64_000, thinking: true, images: false },
+  ];
+
+  it("cheap instruction warns against flagship/over-powered models", () => {
+    const { questions } = prepareClassifierRequest(models);
+    expect(questions.cheap.instructions).toContain("Do not pick a flagship");
+    expect(questions.cheap.instructions).toContain("over-powered");
+  });
+
+  it("fast instruction warns against heavy reasoning models", () => {
+    const { questions } = prepareClassifierRequest(models);
+    expect(questions.fast.instructions).toContain("low latency");
+    expect(questions.fast.instructions).toContain("Do not pick a heavy reasoning");
+  });
+
+  it("balanced instruction mentions general-purpose capability", () => {
+    const { questions } = prepareClassifierRequest(models);
+    expect(questions.balanced.instructions).toContain("everyday workhorse");
+    expect(questions.balanced.instructions).toContain("general-purpose");
+  });
+
+  it("powerful instruction prioritises reasoning over cost", () => {
+    const { questions } = prepareClassifierRequest(models);
+    expect(questions.powerful.instructions).toContain("strongest");
+    expect(questions.powerful.instructions).toContain("reasoning capability");
+    expect(questions.powerful.instructions).toContain("cost is secondary");
+  });
+
+  it("all four tiers have distinct instructions", () => {
+    const { questions } = prepareClassifierRequest(models);
+    const instrs = ["cheap", "fast", "balanced", "powerful"].map(
+      (t) => questions[t].instructions,
+    );
+    // No two tiers should have identical instructions.
+    const unique = new Set(instrs);
+    expect(unique.size).toBe(4);
+  });
+});
+
+describe("capability/cost ranking in narrowed descriptions (Task 8)", () => {
+  const pool: CatalogModel[] = [
+    { provider: "hyper", model: "a-flash", context: 1_000_000, maxOut: 131_100, thinking: true, images: true, costIn: 0.15, costOut: 0.47 },
+    { provider: "hyper", model: "b-pro", context: 1_000_000, maxOut: 384_000, thinking: true, images: false, costIn: 2.0, costOut: 6.0 },
+    { provider: "hyper", model: "c-mini", context: 512_000, maxOut: 64_000, thinking: false, images: true, costIn: 0.30, costOut: 0.80 },
+  ];
+
+  it("adds rank labels to narrowed criteria", () => {
+    const { state } = prepareClassifierRequest(pool, true);
+    // At least one entry should contain a rank label.
+    const hasRank = Object.values(state).some(
+      (d) => d.includes("cheapest in pool") || d.includes("most capable in pool"),
+    );
+    expect(hasRank).toBe(true);
+  });
+
+  it("cheap tier ranks cheapest model first", () => {
+    const { questions } = prepareClassifierRequest(pool, true);
+    const cheapCriteria = questions.cheap.criteria;
+    // The cheapest model (a-flash, cost 0.15+0.47=0.62) should be rank 0.
+    const aFlashDesc = cheapCriteria["hyper_a_flash"];
+    expect(aFlashDesc).toMatch(/\(cheapest in pool\)$/);
+    // The expensive model (b-pro, cost 2.0+6.0=8.0) should be ranked last.
+    const bProDesc = cheapCriteria["hyper_b_pro"];
+    expect(bProDesc).toMatch(/\(3rd cheapest in pool\)$/);
+  });
+
+  it("powerful tier ranks most capable model first", () => {
+    const { questions } = prepareClassifierRequest(pool, true);
+    const powerfulCriteria = questions.powerful.criteria;
+    // b-pro has the largest context and maxOut, should be rank 0.
+    const bProDesc = powerfulCriteria["hyper_b_pro"];
+    expect(bProDesc).toMatch(/\(most capable in pool\)$/);
+  });
+
+  it("narrow: false descriptions have no rank labels", () => {
+    const { state } = prepareClassifierRequest(pool, false);
+    const hasRank = Object.values(state).some(
+      (d) => d.includes("cheapest in pool") || d.includes("most capable in pool") || /\d+(st|nd|rd|th)/.test(d),
+    );
+    expect(hasRank).toBe(false);
+  });
+});
+
+describe("positioningClause composition (family + tier)", () => {
+  it("composes family and tier when both match", () => {
+    const m: CatalogModel = {
+      provider: "hyper", model: "deepseek-v4-pro", context: 1_000_000, maxOut: 384_000,
+      thinking: true, images: false,
+    };
+    expect(positioningClause(m)).toContain("DeepSeek model");
+    expect(positioningClause(m)).toContain("flagship/reasoning tier");
+  });
+
+  it("composes family and lightweight tier for flash variants", () => {
+    const m: CatalogModel = {
+      provider: "hyper", model: "glm-5.3-flash", context: 1_000_000, maxOut: 131_100,
+      thinking: true, images: true,
+    };
+    expect(positioningClause(m)).toContain("Zhipu GLM model");
+    expect(positioningClause(m)).toContain("lightweight, fast tier");
+  });
+
+  it("returns family-only when no tier pattern matches", () => {
+    const m: CatalogModel = {
+      provider: "hyper", model: "minimax-m2.7", context: 262_100, maxOut: 6_600,
+      thinking: false, images: false,
+    };
+    expect(positioningClause(m)).toBe("MiniMax model");
+  });
+
+  it("returns tier-only for unknown families", () => {
+    const m: CatalogModel = {
+      provider: "p", model: "random-pro", context: 1_000_000, maxOut: 64_000,
+      thinking: true, images: true,
+    };
+    expect(positioningClause(m)).toBe("flagship/reasoning tier");
+  });
+
+  it("returns empty string when neither matches", () => {
+    const m: CatalogModel = {
+      provider: "p", model: "model-x", context: 1_000_000, maxOut: 64_000,
+      thinking: false, images: false,
+    };
+    expect(positioningClause(m)).toBe("");
   });
 });
 

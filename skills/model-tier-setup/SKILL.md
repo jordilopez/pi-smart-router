@@ -61,6 +61,7 @@ smart-router-catalog({
   providers: ["hyper", "opencode-go"],  // provider name(s)
   minContext: 1000000,                   // optional: minimum context in tokens
   excludeModels: ["experimental-model"], // optional: model IDs to exclude
+  narrow: true,                          // always — cuts each tier's pool to ≤8 fits and adds positioning clauses; makes the first Jev pass sharp
   prepareClassifier: true                // always — builds the Jev request in the same call
 })
 ```
@@ -84,6 +85,8 @@ The result contains everything the rest of the flow needs:
 }
 ```
 
+Why `narrow: true` by default: the tool cuts each tier's candidate pool to the ~8 most plausible fits and adds a short positioning clause to each description — pre-applying what used to be the sharpening re-run. The first Jev call is therefore already sharp, and the Step 3 sharpening rule rarely triggers, which saves a second Jev call and a second presentation turn on a normal run.
+
 Present the model list and ask — in this same turn — whether any hard filters apply (a minimum context window, excluded model IDs) or specific models should be deselected. Keep the table data — context window, max output, thinking, images — as classification evidence.
 
 - **No changes → do not call `catalog` again.** Go straight to Step 3 with the `classifierRequest` you already hold.
@@ -93,15 +96,20 @@ Present the model list and ask — in this same turn — whether any hard filter
 
 Use the `state` and `questions` from the `classifierRequest` you already hold — do **not** call `catalog` again unless Step 2 changed the pool. Pass them directly to `typesafe_evaluate`.
 
+**Important:** `typesafe_evaluate`'s `questions` parameter must be a **JSON object keyed by question name** (e.g. `{ "cheap": { ... }, "fast": { ... }, "balanced": { ... }, "powerful": { ... } }`), **never an array**. The `smart-router-catalog` tool already returns `questions` in the correct object shape — pass it verbatim. When rebuilding `questions` manually (e.g. during the sharpening re-run), build it as an object with one key per tier, each containing a `{ type: "choice", criteria: { ... } }` entry — do not emit `[ ... ]`.
+
 Key points about the classification:
 - **One Choice question per tier** — four questions total (`cheap`, `fast`, `balanced`, `powerful`), never one question per model. The tool already builds this structure.
 - Respect tool limits: a `choice` question's `criteria` holds at most 64 entries, so up to 64 candidates can be judged per tier in one question; the whole call stays at exactly 4 questions regardless of candidate count. If a provider (or combined shortlist) has more than 64 candidates, ask the user to shortlist first.
-- **Resolve duplicate picks:** because the four tier questions are judged independently, Jev may pick the same model for more than one tier. After getting all four answers, compare `confidence` (or the winning `probabilities` value) across the tiers that collided. Keep the model in the tier where it scored the highest confidence; for each losing tier, take the highest-`probabilities` remaining candidate from that tier's own answer that is not already assigned elsewhere. Repeat until every tier has a distinct model. Never break the `powerful` tier's assignment to resolve a collision elsewhere — resolve the *other* tier instead, per the rubric constraint that `powerful` must stay the most capable choice.
+- **Resolve duplicate picks:** because the four tier questions are judged independently, Jev may pick the same model for more than one tier. After getting all four answers, compare `confidence` (or the winning `probabilities` value) across the tiers that collided:
+  - **Auto-resolve when the contest is lopsided.** If the colliding tiers' confidences differ by ≥ 0.15, keep the model in the higher-confidence tier; for each losing tier, take the highest-`probabilities` remaining candidate from that tier's own answer that is not already assigned elsewhere. Repeat until every tier has a distinct model. Do **not** spend a user turn on a collision that is already lopsided — resolve it and note it in one line of the Step 4 table.
+  - **Escalate only when genuinely close.** If the colliding tiers are within 0.15 of each other, that's a real judgment call between comparable models — present the top two candidates with their probabilities and let the user pick (mark that tier "user-picked" in the Step 4 table).
+  - Never break the `powerful` tier's assignment to resolve a collision elsewhere — resolve the *other* tier instead, per the rubric constraint that `powerful` must stay the most capable choice.
 
 If `typesafe_evaluate` is unavailable or fails (no operator opt-in, no `TYPESAFE_API_KEY`), fall back to classifying the models yourself from the rubric and catalog metadata — and **say explicitly** that Jev was not used and the assignment is your own judgment.
 
-**Sharpening rule (conditional and bounded).** After the Jev pass, **accept the assignment iff every tier's confidence is ≥ 0.6 and no two tiers picked the same model.** Otherwise, do **exactly one** narrowed+enriched re-run:
-- **Narrow the pool.** Cut each tier's candidate list to the ~5–8 models plausibly suited to it (family/positioning naming: "flash"/"mini"/"haiku" cluster toward `cheap`/`fast`, "sonnet"/"plus"/mid-size toward `balanced`, "opus"/"pro"/"max" toward `powerful`) instead of feeding the same full list to every tier's question.
+**Sharpening rule (conditional and bounded).** After the Jev pass, **accept the assignment iff every tier's confidence is ≥ 0.6 and no two tiers picked the same model.** Because Step 2 already passes `narrow: true`, the first pass is usually sharp and this rule should rarely trigger. If it does, do **exactly one** *further* narrowed+enriched re-run. When rebuilding the call yourself, keep `questions` as an object keyed by tier name (`{ "cheap": {...}, "fast": {...}, "balanced": {...}, "powerful": {...} }`) — one `choice` question per tier, never an array:
+- **Narrow the pool further.** Cut each tier's candidate list to the top ~3–5 models plausibly suited to it (family/positioning naming: "flash"/"mini"/"haiku" cluster toward `cheap`/`fast`, "sonnet"/"plus"/mid-size toward `balanced`, "opus"/"pro"/"max" toward `powerful`) — tighter than the first pass's ≤8.
 - **Enrich the descriptions.** Add a short, factual positioning clause to each candidate beyond the raw spec columns — e.g. "Anthropic's smallest, fastest, cheapest Claude tier" or "DeepSeek's flagship 'Pro' tier of v4, above the Flash variant". Raw `context/maxOut/thinking/images` numbers alone don't separate reasoning capability.
 - Resolve any collisions by confidence (see above), then re-check the accept condition.
 
@@ -124,7 +132,11 @@ Present the proposed assignment as a table before writing anything — in the sa
 
 (Here "Rationale" is the justification for the tier choice — not the route's `reasoning` config level.)
 
-Get explicit user approval (use `ask_user` if interactive). Flag any tier left unfilled.
+Get explicit user approval (use `ask_user` if interactive) with quick-pick options so the happy path is a single click:
+- **"Apply as-is"** (default) → Step 5 next turn.
+- **"Tweak one tier"** → user names the tier and the replacement; swap it in and re-present (one turn).
+- **"Re-run with different filters/exclusions"** → treat as the pool changing: narrow the pool, re-run Jev once, present again.
+Flag any tier left unfilled.
 
 ### Step 5: Update the global config
 
