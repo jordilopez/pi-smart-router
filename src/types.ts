@@ -73,11 +73,14 @@ export type RouteTier = "cheap" | "fast" | "balanced" | "powerful";
  * backends from drifting apart.
  */
 export const TIER_RUBRIC: Record<RouteTier, string> = {
-  cheap: "trivial mechanical work: rename, formatting, boilerplate, typo, simple scaffold; no judgement needed",
-  fast: "simple work: factual question, small lookup, or a trivial one-line edit",
-  balanced: "context-aware judgement or multi-step work: code review, analysis, debugging, design discussion",
+  cheap:
+    "obvious, low-risk mechanical work: rename, formatting, imports, boilerplate, typo, simple scaffold, or other changes with no meaningful judgement needed",
+  fast:
+    "routine coding work with a clear implementation: factual question, small lookup, straightforward feature or bug fix, ordinary one-line or multi-file edit; tools or file count alone do not require a higher tier",
+  balanced:
+    "work requiring meaningful context-aware judgement or non-obvious reasoning: ambiguous requirements, code review, tradeoff analysis, design discussion, or debugging where the cause or safe fix is unclear",
   powerful:
-    "genuinely hard work: system architecture, security threat modelling, complex debugging, formal reasoning, cross-cutting refactor",
+    "genuinely difficult or high-risk work: system architecture, security threat modelling, concurrency or root-cause investigation, formal reasoning, difficult algorithms, or cross-cutting refactor",
 };
 
 /** Score thresholds for automatic (threshold-based) route selection. */

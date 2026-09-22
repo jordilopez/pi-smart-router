@@ -197,8 +197,8 @@ export function narrowPool(tier: RouteTier, models: CatalogModel[]): CatalogMode
  */
 const TIER_INSTRUCTIONS: Record<RouteTier, string> = {
   cheap: 'Which model best fits the "cheap" tier? ${RUBRIC}. This tier is cost-sensitive: prefer the cheapest model that can handle trivial tasks. Do not pick a flagship, reasoning-heavy, or otherwise over-powered model.',
-  fast: 'Which model best fits the "fast" tier? ${RUBRIC}. This tier values low latency: prefer the fastest, most responsive model for simple lookups and small edits. Do not pick a heavy reasoning or flagship model.',
-  balanced: 'Which model best fits the "balanced" tier? ${RUBRIC}. This is the everyday workhorse: prefer general-purpose capability; image support is a useful tiebreak.',
+  fast: 'Which model best fits the "fast" tier? ${RUBRIC}. This is the routine coding workhorse: prefer a low latency, fast, capable, cost-effective model for clear implementations and bounded fixes. Do not promote a task merely because it spans multiple files or uses tools. Do not pick a heavy reasoning or flagship model for routine work; reserve those for genuinely difficult tasks.',
+  balanced: 'Which model best fits the "balanced" tier? ${RUBRIC}. This is not the default everyday workhorse; reserve it for meaningful judgment, ambiguity, or non-obvious analysis; prefer general-purpose capability and use image support only as a tiebreak.',
   powerful: 'Which model best fits the "powerful" tier? ${RUBRIC}. This is the strongest tier: prefer the model with the best reasoning capability; cost is secondary. Do not pick a lightweight or fast-only model.',
 };
 
