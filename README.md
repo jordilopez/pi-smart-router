@@ -17,10 +17,10 @@ All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `
 
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
-| cheap | `cheap-code` | `<provider>/<cheap-model>` | Trivial work: greetings and small talk, quick questions, mechanical low-risk tasks (renames, formatting, imports, boilerplate, simple CRUD, test scaffolds). Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules, in heuristic mode. **Not local** — models listed in the example config are hosted. |
-| fast | `fast` | `<provider>/<fast-model>` | Factual questions, trivial lookups, one-line edits. |
-| balanced | `balanced` | `<provider>/<balanced-model>` | The everyday default: normal coding, reviews, multi-file edits. |
-| powerful | `powerful` | `<provider>/<powerful-model>` | Genuinely difficult work only: architecture/system design, root-cause debugging, race conditions/concurrency, security vulnerabilities, hard performance bottlenecks, formal proofs/algorithmic reasoning, cross-cutting refactors. |
+| cheap | `cheap-code` | `<provider>/<cheap-model>` | Obvious, low-risk mechanical work: greetings, renames, formatting, imports, boilerplate, simple CRUD, typos, and test scaffolds. Score-driven via `cheapMax` (0.18) plus explicit mechanical-task rules, in heuristic mode. **Not local** — models listed in the example config are hosted. |
+| fast | `fast` | `<provider>/<fast-model>` | The routine coding workhorse: factual questions, straightforward features and bug fixes, and ordinary one-line or multi-file implementation when the solution is clear. File count or tool usage alone does not require a higher tier. |
+| balanced | `balanced` | `<provider>/<balanced-model>` | Work requiring meaningful judgment: ambiguous requirements, code review, tradeoff analysis, design discussion, or debugging where the cause or safe fix is unclear. |
+| powerful | `powerful` | `<provider>/<powerful-model>` | Genuinely difficult or high-risk work only: architecture/system design, root-cause or concurrency investigations, security threat modeling, difficult algorithms, formal reasoning, hard performance bottlenecks, and cross-cutting refactors. |
 
 ## Install
 
