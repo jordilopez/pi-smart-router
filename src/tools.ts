@@ -3,6 +3,8 @@
  *
  * Extracts manual work from the skill into reusable tools:
  * - smart-router-catalog: retrieves models, applies filters, prepares classifier input
+ * - smart-router-setup-tiers: end-to-end tier classification (per-tier filters, one Jev
+ *   pass, deterministic collision resolution) — proposes routes, does not write config
  * - smart-router-update-routes: updates the config file with validation
  */
 
@@ -14,10 +16,42 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { TIER_RUBRIC, type RouteTier } from "./types.js";
+import { TIER_RUBRIC, ROUTE_EMOJI, type RouteTier } from "./types.js";
 import { validateConfig } from "./config.js";
+import { jevTierClassification, resolveCollisions, applyTierFilters, type TierFilters, TIERS } from "./tier-classification.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Shared fetch: list models for the given providers (exec `pi --list-models`),
+ * attach per-million-token pricing from the model registry, and return parsed
+ * catalog entries. Used by both smart-router-catalog and smart-router-setup-tiers.
+ */
+async function fetchCatalogModels(
+  providers: string[],
+  signal: AbortSignal | undefined,
+  registry?: { find: (p: string, m: string) => any },
+): Promise<CatalogModel[]> {
+  const results = await Promise.all(providers.map((provider) =>
+    execFileAsync(
+      "pi",
+      ["--list-models", provider],
+      { encoding: "utf-8", timeout: 15000, signal },
+    ).then(({ stdout }) => parseModelsTable(stdout)),
+  ));
+  const allModels = results.flat();
+  if (registry?.find) {
+    for (const m of allModels) {
+      const found = registry.find(m.provider, m.model);
+      const cost = found?.cost;
+      if (cost && typeof cost.input === "number" && typeof cost.output === "number") {
+        m.costIn = cost.input;
+        m.costOut = cost.output;
+      }
+    }
+  }
+  return allModels;
+}
 
 /**
  * Parsed model entry from the Pi registry.
@@ -118,8 +152,7 @@ export function modelDescription(m: CatalogModel, positioning?: string): string 
 
 /**
  * Family/positioning name hints per tier, used by the optional `narrow` mode to
- * cut each tier's candidate pool to the models plausibly suited to it (mirrors
- * the sharpening guidance in the model-tier-setup skill).
+ * cut each tier's candidate pool to the models plausibly suited to it.
  */
 const TIER_NAME_HINTS: Record<RouteTier, RegExp[]> = {
   cheap: [/flash/i, /mini/i, /haiku/i, /lite/i, /nano/i],
@@ -196,10 +229,10 @@ export function narrowPool(tier: RouteTier, models: CatalogModel[]): CatalogMode
  * prioritization guidance and negative constraints.
  */
 const TIER_INSTRUCTIONS: Record<RouteTier, string> = {
-  cheap: 'Which model best fits the "cheap" tier? ${RUBRIC}. This tier is cost-sensitive: prefer the cheapest model that can handle trivial tasks. Do not pick a flagship, reasoning-heavy, or otherwise over-powered model.',
-  fast: 'Which model best fits the "fast" tier? ${RUBRIC}. This is the routine coding workhorse: prefer a low latency, fast, capable, cost-effective model for clear implementations and bounded fixes. Do not promote a task merely because it spans multiple files or uses tools. Do not pick a heavy reasoning or flagship model for routine work; reserve those for genuinely difficult tasks.',
-  balanced: 'Which model best fits the "balanced" tier? ${RUBRIC}. This is not the default everyday workhorse; reserve it for meaningful judgment, ambiguity, or non-obvious analysis; prefer general-purpose capability and use image support only as a tiebreak.',
-  powerful: 'Which model best fits the "powerful" tier? ${RUBRIC}. This is the strongest tier: prefer the model with the best reasoning capability; cost is secondary. Do not pick a lightweight or fast-only model.',
+  cheap: 'Which model best fits the "cheap" tier? ${RUBRIC}. This tier is cost-sensitive: prefer the cheapest model that can handle trivial tasks. Context window: 128k-256k is sufficient — do not prioritize large context. Thinking capability: not needed for this tier. Image support: not needed. Do not pick a flagship, reasoning-heavy, or otherwise over-powered model.',
+  fast: 'Which model best fits the "fast" tier? ${RUBRIC}. This is the routine coding workhorse: prefer a low latency, fast, capable, cost-effective model for clear implementations and bounded fixes. Context window: 100k-300k is ideal — large enough for typical codebases but not excessive. Thinking capability: not critical for routine work. Image support: not critical. Do not promote a task merely because it spans multiple files or uses tools. Do not pick a heavy reasoning or flagship model for routine work; reserve those for genuinely difficult tasks.',
+  balanced: 'Which model best fits the "balanced" tier? ${RUBRIC}. This is not the default everyday workhorse; reserve it for meaningful judgment, ambiguity, or non-obvious analysis. Context window: larger context (200k-500k) is important for handling complex codebases and longer conversations. Image support: valuable for tasks involving screenshots, diagrams, or visual debugging — prefer models with image capability. Thinking capability: helpful but not required. Prefer general-purpose capability.',
+  powerful: 'Which model best fits the "powerful" tier? ${RUBRIC}. This is the strongest tier: prefer the model with the best reasoning capability; cost is secondary. Context window: large context (500k+) is essential for architecture-level work and cross-cutting analysis. Thinking capability: required — this tier handles genuinely difficult reasoning, formal analysis, and complex debugging. Image support: optional but welcome. Do not pick a lightweight or fast-only model.',
 };
 
 /**
@@ -231,10 +264,18 @@ function rankLabel(rank: number, tier: RouteTier): string {
  *
  * With `narrow: true` each tier's criteria is cut to ≤ 8 plausible fits
  * (family/positioning naming), each description gains a short positioning
- * clause and an ordinal capability/cost rank, which sharpens the first Jev
- * pass so the skill's bounded re-run rarely triggers.
+ * clause and an ordinal capability/cost rank, which sharpens the single Jev
+ * pass.
+ *
+ * `perTierPools` overrides the pool for individual tiers (e.g. after applying
+ * per-tier capability filters). Tiers without an entry fall back to the
+ * narrow/full behavior above. The pool is capped at 8 entries like narrow.
  */
-export function prepareClassifierRequest(models: CatalogModel[], narrow = false) {
+export function prepareClassifierRequest(
+  models: CatalogModel[],
+  narrow = false,
+  perTierPools?: Partial<Record<RouteTier, CatalogModel[]>>,
+) {
   // Base descriptions: positioning clause when narrow, plain when not.
   const baseDescriptions = new Map<string, string>();
   for (const m of models) {
@@ -254,8 +295,9 @@ export function prepareClassifierRequest(models: CatalogModel[], narrow = false)
 
   for (const tier of tiers) {
     let criteria: Record<string, string>;
-    if (narrow) {
-      const pool = narrowPool(tier, models);
+    const explicitPool = perTierPools?.[tier];
+    if (narrow || explicitPool) {
+      const pool = (explicitPool ?? narrowPool(tier, models)).slice(0, 8);
       // Rank the pool: cheap/fast by cost asc, balanced/powerful by capability desc.
       const ranked = tier === "cheap" || tier === "fast"
         ? [...pool].sort((a, b) => {
@@ -272,6 +314,10 @@ export function prepareClassifierRequest(models: CatalogModel[], narrow = false)
         // Merge ranked description into state so all tiers' ranks are visible.
         state[key] = criteria[key];
       }
+      // A tier with no eligible candidates gets no question: a Choice question
+      // requires at least one criterion, and its callers treat a missing answer
+      // as "unassigned".
+      if (Object.keys(criteria).length === 0) continue;
     } else {
       criteria = state;
     }
@@ -289,6 +335,7 @@ export function prepareClassifierRequest(models: CatalogModel[], narrow = false)
 
   return { state, questions };
 }
+
 
 /**
  * Validate that every route references a well-formed `provider/modelId` that
@@ -415,7 +462,7 @@ export function registerTools(pi: ExtensionAPI): void {
         narrow: {
           type: "boolean",
           description:
-            "With prepareClassifier: cut each tier's candidate pool to ≤ 8 plausible fits (family/positioning naming) and add positioning clauses to the descriptions. Sharpens the first Jev pass so a re-run rarely triggers. Default false (full pool, spec-only descriptions).",
+            "With prepareClassifier: cut each tier's candidate pool to ≤ 8 plausible fits (family/positioning naming) and add positioning clauses to the descriptions. Sharpens the single Jev pass. Default false (full pool, spec-only descriptions).",
         },
       },
       required: ["providers"],
@@ -430,33 +477,7 @@ export function registerTools(pi: ExtensionAPI): void {
       };
 
       // Query each provider (async with timeout to avoid blocking the event loop)
-      const allModels: CatalogModel[] = [];
-      for (const provider of providers) {
-        const { stdout } = await execFileAsync(
-          "pi",
-          ["--list-models", provider],
-          { encoding: "utf-8", timeout: 15000, signal },
-        );
-        const models = parseModelsTable(stdout);
-        allModels.push(...models);
-      }
-
-      // Attach per-million-token pricing from the same model registry the router
-      // resolves routes against. pi --list-models exposes no price column, and
-      // cost is the real cheap/fast tier signal — without it the classifier can
-      // only guess. Lookups that fail (e.g. a name the registry doesn't know) are
-      // left without cost rather than dropping the model.
-      const registry = ctx?.modelRegistry;
-      if (registry?.find) {
-        for (const m of allModels) {
-          const found = registry.find(m.provider, m.model);
-          const cost = found?.cost;
-          if (cost && typeof cost.input === "number" && typeof cost.output === "number") {
-            m.costIn = cost.input;
-            m.costOut = cost.output;
-          }
-        }
-      }
+      const allModels = await fetchCatalogModels(providers, signal, ctx?.modelRegistry);
 
       // Apply filters
       let filtered = allModels;
@@ -562,6 +583,175 @@ export function registerTools(pi: ExtensionAPI): void {
     renderResult(result, { isPartial }) {
       if (isPartial) return new Text("Smart Router Update Routes · updating…", 0, 0);
       return new Text("Smart Router Update Routes · config updated", 0, 0);
+    },
+  });
+
+  // Tool 3: smart-router-setup-tiers — end-to-end tier classification.
+  pi.registerTool({
+    name: "smart-router-setup-tiers",
+    label: "Smart Router Setup Tiers",
+    description:
+      "Classifies the Pi model catalog into the four smart-router tiers in one call: fetches models, applies per-tier capability filters, asks TypeSafe Jev (one choice question per tier, single request), resolves duplicate picks deterministically, and returns a proposed assignment with ready-to-write routes. Does NOT write the config — pass the returned routes to smart-router-update-routes after user approval. Takes Jev's first response as-is; low confidence is surfaced as a warning, never re-run.",
+    promptSnippet: "Classify models into tiers with Jev and propose routes",
+    parameters: {
+      type: "object",
+      properties: {
+        providers: {
+          type: "array",
+          items: { type: "string" },
+          description: "Provider name(s) to classify (e.g. ['hyper', 'opencode-go'])",
+        },
+        excludeModels: {
+          type: "array",
+          items: { type: "string" },
+          description: "Model IDs to exclude before classification (exact match, lowercase)",
+        },
+        tierOverrides: {
+          type: "object",
+          description:
+            "Per-tier filter overrides merged on top of defaults. Each key is a tier (cheap, fast, balanced, powerful); each value may set minContext (tokens), requireThinking (bool), requireImages (bool). Omit to use defaults: cheap 128k, fast 100k, balanced 200k+images, powerful 500k+thinking.",
+          properties: {
+            cheap: {
+              type: "object",
+              description: "Partial TierFilters for cheap",
+              properties: {
+                minContext: { type: "number", description: "Minimum context window in tokens" },
+                requireThinking: { type: "boolean", description: "Only thinking models eligible" },
+                requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+              },
+            },
+            fast: {
+              type: "object",
+              description: "Partial TierFilters for fast",
+              properties: {
+                minContext: { type: "number", description: "Minimum context window in tokens" },
+                requireThinking: { type: "boolean", description: "Only thinking models eligible" },
+                requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+              },
+            },
+            balanced: {
+              type: "object",
+              description: "Partial TierFilters for balanced",
+              properties: {
+                minContext: { type: "number", description: "Minimum context window in tokens" },
+                requireThinking: { type: "boolean", description: "Only thinking models eligible" },
+                requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+              },
+            },
+            powerful: {
+              type: "object",
+              description: "Partial TierFilters for powerful",
+              properties: {
+                minContext: { type: "number", description: "Minimum context window in tokens" },
+                requireThinking: { type: "boolean", description: "Only thinking models eligible" },
+                requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+              },
+            },
+          },
+        },
+        narrow: {
+          type: "boolean",
+          description: "Cap each filtered tier pool at 8 candidates with positioning clauses. Default true.",
+        },
+      },
+      required: ["providers"],
+    },
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      const { providers, excludeModels, tierOverrides, narrow } = params as {
+        providers: string[];
+        excludeModels?: string[];
+        tierOverrides?: Partial<Record<RouteTier, Partial<TierFilters>>>;
+        narrow?: boolean;
+      };
+
+      // 1. Fetch catalog and drop excluded models.
+      let models = await fetchCatalogModels(providers, signal, ctx?.modelRegistry);
+      if (excludeModels && excludeModels.length > 0) {
+        const excludeSet = new Set(excludeModels.map((id) => id.toLowerCase()));
+        models = models.filter((m) => !excludeSet.has(m.model.toLowerCase()));
+      }
+
+      const warnings: string[] = [];
+      if (models.length === 0) {
+        throw new Error(`No models found for provider(s): ${providers.join(", ")}`);
+      }
+
+      // 2. Per-tier capability pools.
+      const tierPools = {} as Record<RouteTier, CatalogModel[]>;
+      for (const tier of TIERS) {
+        const pool = applyTierFilters(tier, models, tierOverrides?.[tier]);
+        tierPools[tier] = pool;
+        if (pool.length === 0) {
+          warnings.push(
+            `tier '${tier}': no model passes its capability filters; relax via tierOverrides`,
+          );
+        }
+      }
+
+      // 3. Single Jev pass + deterministic collision resolution.
+      const jev = await jevTierClassification(models, {
+        narrow: narrow !== false,
+        tierPools,
+      });
+      const allPoolModels = [...new Set(TIERS.flatMap((t) => tierPools[t]))];
+      const resolved = resolveCollisions(jev.assignments, allPoolModels);
+
+      // 4. Build the proposed table and update-routes payload.
+      const ROUTE_NAMES: Record<RouteTier, string> = {
+        cheap: "cheap-code",
+        fast: "fast",
+        balanced: "balanced",
+        powerful: "powerful",
+      };
+      const assignments = TIERS.map((tier) => {
+        const pick = resolved[tier];
+        return {
+          tier,
+          route: ROUTE_NAMES[tier],
+          model: pick.model ? `${pick.model.provider}/${pick.model.model}` : null,
+          confidence: pick.confidence,
+          collisionResolved:
+            pick.model !== jev.assignments[tier].model,
+        };
+      });
+      for (const a of assignments) {
+        if (a.confidence < 0.6) {
+          warnings.push(`tier '${a.tier}': low Jev confidence (${a.confidence.toFixed(2)}) — review before applying`);
+        }
+      }
+      const unassigned = assignments.filter((a) => !a.model).map((a) => a.tier);
+      if (unassigned.length > 0) {
+        warnings.push(`unfilled tiers: ${unassigned.join(", ")} (not included in routes)`);
+      }
+
+      const routes: Record<string, { model: string; reasoning: string; emoji: string }> = {};
+      for (const tier of TIERS) {
+        const pick = resolved[tier];
+        if (!pick.model) continue;
+        const routeName = ROUTE_NAMES[tier];
+        const reasoning = pick.model.thinking ? (tier === "powerful" ? "high" : "low") : "preserve";
+        routes[routeName] = {
+          model: `${pick.model.provider}/${pick.model.model}`,
+          reasoning,
+          emoji: ROUTE_EMOJI[routeName] ?? "",
+        };
+      }
+
+      const result = { assignments, routes, warnings };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+    renderCall(args) {
+      const providers = (args.providers as string[])?.join(", ") || "?";
+      return new Text(`Smart Router Setup Tiers · providers: ${providers}`, 0, 0);
+    },
+    renderResult(result, { isPartial }) {
+      if (isPartial) return new Text("Smart Router Setup Tiers · classifying…", 0, 0);
+      const d = result.details as any;
+      const n = d?.routes ? Object.keys(d.routes).length : 0;
+      return new Text(`Smart Router Setup Tiers · ${n} route${n === 1 ? "" : "s"} proposed`, 0, 0);
     },
   });
 }

@@ -1,4 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { RouteTier } from "../src/types.js";
+import {
+  applyTierFilters,
+  defaultTierFilters,
+  jevTierClassification,
+  resolveCollisions,
+  resetTierSetupClient,
+  type JevTierAssignment,
+  type SystemOneCaller,
+} from "../src/tier-classification.js";
 import {
   modelDescription,
   narrowPool,
@@ -425,6 +435,246 @@ describe("prepareClassifierRequest (narrow: true)", () => {
     for (const tier of ["cheap", "fast", "balanced", "powerful"]) {
       expect(Object.keys(baseline.questions[tier].criteria).sort()).toEqual(Object.keys(baseline.state).sort());
     }
+  });
+});
+
+describe("resolveCollisions", () => {
+  const models: CatalogModel[] = [
+    { provider: "hyper", model: "a-flash", context: 1_000_000, maxOut: 64_000, thinking: false, images: false },
+    { provider: "hyper", model: "b-plus", context: 1_000_000, maxOut: 64_000, thinking: false, images: true },
+    { provider: "hyper", model: "c-pro", context: 1_000_000, maxOut: 384_000, thinking: true, images: false },
+    { provider: "hyper", model: "d-max", context: 1_000_000, maxOut: 128_000, thinking: true, images: true },
+  ];
+  const slug = (m: CatalogModel) => slugify(`${m.provider}/${m.model}`);
+
+  function asg(tier: RouteTier, model: CatalogModel | undefined, confidence: number, probabilities: Record<string, number>): JevTierAssignment {
+    return { tier, model, confidence, probabilities };
+  }
+
+  it("passes through when there are no collisions", () => {
+    const input = {
+      cheap: asg("cheap", models[0], 0.9, {}),
+      fast: asg("fast", models[1], 0.8, {}),
+      balanced: asg("balanced", models[1], 0.7, {}), // same as fast — collision
+      powerful: asg("powerful", models[2], 0.95, {}),
+    };
+    const out = resolveCollisions(input, models);
+    const ids = Object.values(out).map((a) => a.model?.model);
+    expect(new Set(ids.filter(Boolean)).size).toBe(Object.values(out).filter((a) => a.model).length);
+  });
+
+  it("keeps the model in the higher-confidence tier", () => {
+    const input = {
+      cheap: asg("cheap", models[0], 0.9, { [slug(models[0])]: 0.9, [slug(models[1])]: 0.1 }),
+      fast: asg("fast", models[0], 0.6, { [slug(models[0])]: 0.6, [slug(models[3])]: 0.3 }),
+      balanced: asg("balanced", models[1], 0.7, {}),
+      powerful: asg("powerful", models[2], 0.95, {}),
+    };
+    const out = resolveCollisions(input, models);
+    expect(out.cheap.model?.model).toBe("a-flash");   // higher confidence keeps
+    expect(out.fast.model?.model).toBe("d-max");      // next-best from its own probabilities
+    expect(out.fast.confidence).toBe(0.3);
+  });
+
+  it("displaces the lower tier even when it served first", () => {
+    const input = {
+      cheap: asg("cheap", models[0], 0.5, { [slug(models[0])]: 0.5, [slug(models[3])]: 0.4 }),
+      fast: asg("fast", models[0], 0.8, { [slug(models[0])]: 0.8, [slug(models[2])]: 0.15 }),
+      balanced: asg("balanced", models[1], 0.7, {}),
+      powerful: asg("powerful", models[2], 0.95, {}),
+    };
+    const out = resolveCollisions(input, models);
+    expect(out.fast.model?.model).toBe("a-flash");    // 0.8 beats cheap's 0.5
+    expect(out.cheap.model?.model).toBe("d-max");     // cheap yields, takes next-best
+    expect(out.cheap.confidence).toBe(0.4);
+  });
+
+  it("never displaces powerful", () => {
+    // powerful and balanced both want c-pro; powerful wins regardless of the
+    // higher balanced confidence. balanced yields to its next-best, b-plus
+    // (fast holds nothing here, so b-plus is free).
+    const input = {
+      cheap: asg("cheap", models[0], 0.9, { [slug(models[0])]: 0.9 }),
+      fast: asg("fast", undefined, 0, {}),
+      balanced: asg("balanced", models[2], 0.99, { [slug(models[2])]: 0.99, [slug(models[1])]: 0.01 }),
+      powerful: asg("powerful", models[2], 0.8, { [slug(models[2])]: 0.8 }),
+    };
+    const out = resolveCollisions(input, models);
+    expect(out.powerful.model?.model).toBe("c-pro");  // powerful keeps its pick
+    expect(out.balanced.model?.model).toBe("b-plus"); // balanced yields to next-best
+  });
+
+  it("resolves cascading collisions", () => {
+    // fast wins a-flash over cheap (0.9 > 0.6); cheap yields. cheap's next-best
+    // (b-plus) is held by balanced with higher confidence (0.8 > 0.5), so cheap
+    // moves on to c-pro — which is free here. Final: all distinct.
+    const input = {
+      cheap: asg("cheap", models[0], 0.6, { [slug(models[0])]: 0.6, [slug(models[1])]: 0.5, [slug(models[2])]: 0.1 }),
+      fast: asg("fast", models[0], 0.9, { [slug(models[0])]: 0.9 }),
+      balanced: asg("balanced", models[1], 0.8, { [slug(models[1])]: 0.8 }),
+      powerful: asg("powerful", models[2], 0.95, { [slug(models[2])]: 0.95 }),
+    };
+    const out = resolveCollisions(input, models);
+    expect(out.fast.model?.model).toBe("a-flash");
+    expect(out.balanced.model?.model).toBe("b-plus");
+    expect(out.powerful.model?.model).toBe("c-pro");
+    expect(out.cheap.model).toBeUndefined(); // every candidate already held
+    const ids = Object.values(out).map((a) => a.model?.model).filter(Boolean);
+    expect(new Set(ids).size).toBe(3); // three distinct, one undefined
+  });
+
+  it("leaves a tier unassigned when no candidates remain", () => {
+    const input = {
+      cheap: asg("cheap", models[0], 0.9, { [slug(models[0])]: 0.9 }),
+      fast: asg("fast", models[0], 0.8, { [slug(models[0])]: 0.8 }),
+      balanced: asg("balanced", models[1], 0.7, {}),
+      powerful: asg("powerful", models[2], 0.95, {}),
+    };
+    const out = resolveCollisions(input, models);
+    expect(out.fast.model).toBeUndefined();
+    expect(out.fast.confidence).toBe(0);
+    expect(out.cheap.model?.model).toBe("a-flash");
+  });
+
+  it("does not mutate the input", () => {
+    const input = {
+      cheap: asg("cheap", models[0], 0.9, {}),
+      fast: asg("fast", models[1], 0.8, {}),
+      balanced: asg("balanced", models[1], 0.7, {}),
+      powerful: asg("powerful", models[2], 0.95, {}),
+    };
+    const before = JSON.stringify(input);
+    resolveCollisions(input, models);
+    expect(JSON.stringify(input)).toBe(before);
+  });
+});
+
+describe("jevTierClassification", () => {
+  const models: CatalogModel[] = [
+    { provider: "hyper", model: "a-flash", context: 1_000_000, maxOut: 64_000, thinking: false, images: false },
+    { provider: "hyper", model: "b-pro", context: 1_000_000, maxOut: 384_000, thinking: true, images: false },
+  ];
+
+  function fakeClient(overrides?: Partial<Record<RouteTier, { type?: string; choice: string; confidence: number; probabilities: Record<string, number> }>>): SystemOneCaller & { calls: any[] } {
+    const calls: any[] = [];
+    return {
+      calls,
+      async systemOne(request: any) {
+        calls.push(request);
+        const answers: any = {};
+        for (const tier of ["cheap", "fast", "balanced", "powerful"]) {
+          const o = overrides?.[tier as RouteTier];
+          answers[tier] = o ?? { type: "choice", choice: "hyper_a_flash", confidence: 0.8, probabilities: { hyper_a_flash: 0.8, hyper_b_pro: 0.2 } };
+        }
+        return { answers, usage: { input_tokens: 10, output_tokens: 2 } };
+      },
+    };
+  }
+
+  it("makes exactly one systemOne call with one choice question per tier", async () => {
+    const client = fakeClient();
+    await jevTierClassification(models, { client });
+    expect(client.calls).toHaveLength(1);
+    const q = client.calls[0].questions;
+    expect(Object.keys(q).sort()).toEqual(["balanced", "cheap", "fast", "powerful"]);
+    for (const tier of ["cheap", "fast", "balanced", "powerful"]) {
+      expect(q[tier].type).toBe("choice");
+    }
+  });
+
+  it("maps answers back to CatalogModels by slug", async () => {
+    const { assignments } = await jevTierClassification(models, {
+      client: fakeClient({ powerful: { type: "choice", choice: "hyper_b_pro", confidence: 0.9, probabilities: { hyper_b_pro: 0.9, hyper_a_flash: 0.1 } } }),
+    });
+    expect(assignments.cheap.model?.model).toBe("a-flash");
+    expect(assignments.powerful.model?.model).toBe("b-pro");
+    expect(assignments.powerful.confidence).toBe(0.9);
+  });
+
+  it("carries usage through", async () => {
+    const { usage } = await jevTierClassification(models, { client: fakeClient() });
+    expect(usage).toEqual({ input_tokens: 10, output_tokens: 2 });
+  });
+
+  it("defaults narrow to true (positioning clauses present)", async () => {
+    const client = fakeClient();
+    await jevTierClassification(models, { client });
+    expect(Object.values(client.calls[0].state).join(" ")).toContain("tier"); // positioning clause text
+  });
+
+  it("survives a missing/invalid answer for a tier", async () => {
+    const client = fakeClient({ fast: { type: "choice", choice: "", confidence: 0, probabilities: {} } });
+    const { assignments } = await jevTierClassification(models, { client });
+    expect(assignments.fast.model).toBeUndefined();
+    expect(assignments.fast.confidence).toBe(0);
+  });
+
+  it("throws a clear error when no client is available", async () => {
+    const savedKey = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    resetTierSetupClient();
+    try {
+      await expect(jevTierClassification(models)).rejects.toThrow(/TypeSafe client unavailable/);
+    } finally {
+      if (savedKey !== undefined) process.env.TYPESAFE_API_KEY = savedKey;
+    }
+  });
+
+  it("throws when there are no candidates", async () => {
+    await expect(jevTierClassification([], { client: fakeClient() })).rejects.toThrow(/No candidate models/);
+  });
+});
+
+describe("defaultTierFilters / applyTierFilters", () => {
+  const models: CatalogModel[] = [
+    { provider: "hyper", model: "tiny", context: 32_000, maxOut: 8_000, thinking: false, images: false },
+    { provider: "hyper", model: "a-flash", context: 100_000, maxOut: 64_000, thinking: false, images: false },
+    { provider: "hyper", model: "b-plus", context: 256_000, maxOut: 64_000, thinking: false, images: true },
+    { provider: "hyper", model: "c-pro", context: 1_000_000, maxOut: 384_000, thinking: true, images: false },
+  ];
+
+  it("returns the documented defaults per tier", () => {
+    expect(defaultTierFilters("cheap")).toEqual({ minContext: 128_000, requireThinking: false, requireImages: false });
+    expect(defaultTierFilters("fast")).toEqual({ minContext: 100_000, requireThinking: false, requireImages: false });
+    expect(defaultTierFilters("balanced")).toEqual({ minContext: 200_000, requireThinking: false, requireImages: true });
+    expect(defaultTierFilters("powerful")).toEqual({ minContext: 500_000, requireThinking: true, requireImages: false });
+  });
+
+  it("cheap keeps small non-thinking models", () => {
+    const ids = applyTierFilters("cheap", models).map((m) => m.model);
+    expect(ids).toContain("c-pro"); // 1M context, passes 128k floor
+    expect(ids).not.toContain("tiny"); // 32k context below 128k floor
+    expect(ids).not.toContain("a-flash"); // 100k context below 128k floor
+  });
+
+  it("fast drops models below its context floor", () => {
+    const ids = applyTierFilters("fast", models).map((m) => m.model);
+    expect(ids).toEqual(["a-flash", "b-plus", "c-pro"]);
+  });
+
+  it("balanced requires image support", () => {
+    const ids = applyTierFilters("balanced", models).map((m) => m.model);
+    expect(ids).toEqual(["b-plus"]);
+  });
+
+  it("powerful requires thinking and 500k context", () => {
+    const ids = applyTierFilters("powerful", models).map((m) => m.model);
+    expect(ids).toEqual(["c-pro"]);
+  });
+
+  it("overrides merge on top of defaults", () => {
+    const ids = applyTierFilters("balanced", models, { requireImages: false }).map((m) => m.model);
+    expect(ids).toEqual(["b-plus", "c-pro"]); // context floor still applies
+  });
+
+  it("an override can relax every filter", () => {
+    expect(applyTierFilters("powerful", models, { minContext: 0, requireThinking: false }).length).toBe(4);
+  });
+
+  it("does not mutate the tier defaults", () => {
+    const before = defaultTierFilters("balanced");
+    applyTierFilters("balanced", models, { requireImages: false });
+    expect(defaultTierFilters("balanced")).toEqual(before);
   });
 });
 
