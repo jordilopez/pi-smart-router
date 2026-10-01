@@ -17,10 +17,11 @@
     "smart-routing"
   ],
   "dependencies": {
-    "zod": "^3.23.0",
-    "@typesafe-ai/sdk": "^0.6.0"
+    "@typesafe-ai/sdk": "^0.6.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.99.2",
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
