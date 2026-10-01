@@ -1,43 +1,15 @@
 /**
- * Backend delegation for the Smart Router.
+ * Backend resolution for the Smart Router.
  *
  * Resolves backend models through pi's ModelRegistry (find + getProvider +
- * getApiKeyAndHeaders), builds the delegation model/options, and streams
- * events from the backend provider's streamSimple with error normalization.
+ * getApiKeyAndHeaders) for use by route() in the virtual model.
+ * No delegation/streaming logic remains — pi streams natively from the
+ * returned physical model.
  */
 
-import type { Api, AssistantMessageEvent, Context, Model, Provider, ProviderHeaders, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Api, Model, ProviderHeaders, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { RouterError } from "./types.js";
 import type { ResolvedBackend, RouterModelRegistry } from "./types.js";
-
-// ============================================================================
-// OpenCode Go session header
-// ============================================================================
-
-/** Provider id that requires the x-opencode-session request header. */
-export const OPENCODE_GO_PROVIDER_ID = "opencode-go";
-/** Header Console Go requires so requests can be routed efficiently. */
-export const OPENCODE_GO_SESSION_HEADER = "x-opencode-session";
-
-/** Case-insensitive header presence check. */
-function hasHeaderCaseInsensitive(headers: ProviderHeaders | undefined, name: string): boolean {
-  if (!headers) return false;
-  const lower = name.toLowerCase();
-  return Object.keys(headers).some((key) => key.toLowerCase() === lower);
-}
-
-/**
- * The stable session id used for backend requests. An explicit
- * `options.sessionId` from the caller wins; otherwise the captured Pi session
- * id is used. Never a random per-request id - the value is stable for the Pi
- * session (and therefore across tool continuations within it).
- */
-export function resolveRouterSessionId(
-  options: SimpleStreamOptions | undefined,
-  routerSessionId: string | undefined,
-): string | undefined {
-  return options?.sessionId ?? routerSessionId;
-}
 
 // ============================================================================
 // Backend resolution
@@ -57,6 +29,60 @@ export function parseModelRef(modelRef: string): { providerId: string; modelId: 
   return { providerId, modelId };
 }
 
+/** Build the delegation model: same model with the resolved baseUrl applied. */
+export function createDelegationModel(backend: ResolvedBackend): Model<Api> {
+  return {
+    ...backend.model,
+    baseUrl: backend.baseUrl || backend.model.baseUrl,
+  };
+}
+
+/**
+ * Build stream options for delegation: forward all caller options and inject
+ * the resolved apiKey/headers plus provider-level headers.
+ *
+ * Used by the LLM classifier backend (classifyWithLlm). Session attribution
+ * headers for opencode/opencode-go providers are injected natively by pi core
+ * (provider-attribution.ts), so no session-header handling happens here.
+ */
+export function buildStreamOptions(
+  options: SimpleStreamOptions | undefined,
+  backend: ResolvedBackend,
+  /** Explicit session id for providers with session-based features (classifier path). */
+  sessionId?: string,
+): SimpleStreamOptions {
+  const headers: ProviderHeaders = {
+    ...(options?.headers ?? {}),
+    ...(backend.headers ?? {}),
+    ...(backend.provider.headers ?? {}),
+  };
+
+  return {
+    ...(options ?? {}),
+    apiKey: backend.apiKey ?? options?.apiKey,
+    headers,
+    // Keep StreamOptions.sessionId aligned with provider session features
+    // (explicit caller value wins). Others ignore it.
+    sessionId: options?.sessionId ?? sessionId,
+  };
+}
+
+// ============================================================================
+// Context-overflow detection (used by retry routing)
+// ============================================================================
+
+const CONTEXT_OVERFLOW_PATTERNS = [
+  "context_length_exceeded",
+  "exceeds the context window",
+  "maximum context length",
+  "too many tokens",
+];
+
+/** Whether an error message looks like a context-overflow error. */
+export function isContextOverflowError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return CONTEXT_OVERFLOW_PATTERNS.some((p) => lower.includes(p));
+}
 /**
  * Resolve a backend model reference through pi's model registry.
  * Throws RouterError when the model/provider is missing or auth is not
@@ -118,109 +144,4 @@ export async function resolveBackend(
     headers: auth.headers ?? undefined,
     baseUrl,
   };
-}
-
-/** Build the delegation model: same model with the resolved baseUrl applied. */
-export function createDelegationModel(backend: ResolvedBackend): Model<Api> {
-  return {
-    ...backend.model,
-    baseUrl: backend.baseUrl || backend.model.baseUrl,
-  };
-}
-
-/**
- * Build stream options for delegation: forward all caller options (signal,
- * maxTokens, temperature, samplingParams, sessionId, cacheRetention,
- * onPayload, onResponse, toolChoice, thinkingBudgets, ...) and inject the
- * resolved apiKey/headers plus provider-level headers.
- */
-export function buildStreamOptions(
-  options: SimpleStreamOptions | undefined,
-  backend: ResolvedBackend,
-  routerSessionId?: string,
-): SimpleStreamOptions {
-  const headers: ProviderHeaders = {
-    ...(options?.headers ?? {}),
-    ...(backend.headers ?? {}),
-    ...(backend.provider.headers ?? {}),
-  };
-
-  // Stable session id: explicit caller value first, then the captured Pi
-  // session id. Console Go (opencode-go) rejects requests without
-  // x-opencode-session, so inject it whenever we have a session id and the
-  // caller did not already supply one. Other providers are untouched.
-  const sessionId = resolveRouterSessionId(options, routerSessionId);
-  if (
-    backend.provider.id === OPENCODE_GO_PROVIDER_ID &&
-    sessionId &&
-    !hasHeaderCaseInsensitive(headers, OPENCODE_GO_SESSION_HEADER)
-  ) {
-    headers[OPENCODE_GO_SESSION_HEADER] = sessionId;
-  }
-
-  return {
-    ...(options ?? {}),
-    apiKey: backend.apiKey ?? options?.apiKey,
-    headers,
-    // Keep StreamOptions.sessionId aligned with the header value (explicit
-    // caller value wins). Providers that support session-based features use
-    // it; others ignore it.
-    sessionId: options?.sessionId ?? sessionId,
-  };
-}
-
-// ============================================================================
-// Delegation with error normalization
-// ============================================================================
-
-const CONTEXT_OVERFLOW_PATTERNS = [
-  "context_length_exceeded",
-  "exceeds the context window",
-  "maximum context length",
-  "too many tokens",
-];
-
-/** Whether an error message looks like a context-overflow error. */
-export function isContextOverflowError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return CONTEXT_OVERFLOW_PATTERNS.some((p) => lower.includes(p));
-}
-
-/** Prefix error messages so pi's auto-compaction recognizes context overflow. */
-export function normalizeBackendError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  if (isContextOverflowError(message)) {
-    return new Error(`context_length_exceeded: ${message}`);
-  }
-  return error instanceof Error ? error : new Error(message);
-}
-
-/**
- * Delegate to a backend provider's streamSimple and yield all events.
- * Backend throws are normalized (context-overflow messages get the
- * `context_length_exceeded:` prefix so pi's auto-compaction recognizes them).
- */
-export async function* delegateToBackend(
-  provider: Provider,
-  delegationModel: Model<Api>,
-  context: Context,
-  streamOptions: SimpleStreamOptions,
-): AsyncGenerator<AssistantMessageEvent, void, unknown> {
-  try {
-    let inner: AsyncIterable<AssistantMessageEvent>;
-    try {
-      inner = provider.streamSimple(delegationModel, context, streamOptions);
-    } catch (error) {
-      // Synchronous setup errors (e.g. missing auth) thrown by streamSimple.
-      throw normalizeBackendError(error);
-    }
-
-    for await (const event of inner) {
-      yield event;
-    }
-  } catch (error) {
-    // Normalize mid-stream failures (e.g. context overflow) before they
-    // propagate to the router's stream handler.
-    throw normalizeBackendError(error);
-  }
 }

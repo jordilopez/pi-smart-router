@@ -18,8 +18,8 @@ import { classifyPrompt } from "./classifier.js";
 import { isClassifierAvailable, runClassifier } from "./classifier-orchestrator.js";
 import { classifierThresholds, resolveRoute, tierForScore } from "./route-resolver.js";
 import { parseModelRef } from "./backend.js";
-import { RouterError } from "./types.js";
-import type { PromptFeatures, RouteTier, RouterModelRegistry, SmartRouterConfig } from "./types.js";
+import { ROUTE_EMOJI, RouterError } from "./types.js";
+import type { PromptFeatures, RouteDecision, RouteTier, RouterModelRegistry, SmartRouterConfig } from "./types.js";
 import type { ClassifierStats } from "./typesafe-client.js";
 
 /** Extension context subset `route()` needs. */
@@ -134,6 +134,43 @@ async function resolveFresh(
       classifierVerdict,
     },
   };
+}
+
+/** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
+export const STATUS_KEY = "pi-smart-router";
+
+/**
+ * Format the footer status line for a routing decision.
+ *
+ * Shape: `<glyph> <route> · <backendModel> · <source>[ · <elapsed>ms/<in>i/<out>o]`,
+ * where source is `rule:<id>` for matched rules, `classifier[ <from>→<to>]` when
+ * the classifier ran, or the resolver reason otherwise. When the classifier ran
+ * and reported stats, its cost is appended. Never includes prompt text.
+ *
+ * Covers only classifier diagnostics — the routed-model display comes from
+ * pi's native virtual-model footer.
+ */
+export function formatDecisionStatus(decision: RouteDecision): string {
+  const glyph = decision.routeConfig.emoji ?? ROUTE_EMOJI[decision.route] ?? "↳";
+  let source: string;
+  if (decision.matchedRule) {
+    source = `rule:${decision.matchedRule}`;
+  } else if (decision.classifierVerdict) {
+    source = "classifier";
+  } else {
+    source = decision.reason;
+  }
+  let stats = "";
+  const cs = decision.classifierStats;
+  if (cs) {
+    const parts: string[] = [];
+    if (cs.elapsedMs !== undefined) parts.push(`${cs.elapsedMs}ms`);
+    if (cs.inputTokens !== undefined || cs.outputTokens !== undefined) {
+      parts.push(`${cs.inputTokens ?? "?"}i/${cs.outputTokens ?? "?"}o`);
+    }
+    if (parts.length > 0) stats = ` · ${parts.join("/")}`;
+  }
+  return `${glyph} ${decision.route} · ${decision.backendModel} · ${source}${stats}`;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDecisionStatus } from "../src/provider.js";
+import { formatDecisionStatus } from "../src/virtual-router.js";
 import { BUILTIN_DEFAULTS } from "../src/types.js";
 import type { RouteDecision } from "../src/types.js";
 

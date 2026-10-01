@@ -232,7 +232,14 @@ export async function classifyWithLlm(
   // the background until the abort takes effect; it must never reject.
   const consumePromise = (async (): Promise<boolean> => {
     try {
-      const inner = backend.provider.streamSimple(delegationModel, classifierContext, streamOptions);
+      // buildTranscript produces a plain Context; pi 0.99 brands the
+      // streamSimple transcript parameter as TranscriptContext (same shape,
+      // branded). Cast through unknown until the builder returns the brand.
+      const inner = backend.provider.streamSimple(
+        delegationModel,
+        classifierContext as unknown as Parameters<typeof backend.provider.streamSimple>[1],
+        streamOptions,
+      );
       for await (const event of inner as AsyncIterable<AssistantMessageEvent>) {
         if (event.type === "text_delta") {
           const delta = (event as { delta?: string }).delta;
