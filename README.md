@@ -167,7 +167,7 @@ User keywords in rules are matched as **escaped literal phrases** (case-insensit
 
 For each new user turn (tool-call continuations and retries reuse the turn's backend — see below):
 
-1. **Explicit rules**, highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues.
+1. **Explicit rules** — heuristic mode only. Highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues. With a classifier configured and available, rules are **skipped entirely** (the verdict decides); they apply again when the classifier fails.
 2. **Complexity thresholds — heuristic mode only** (cheap → fast → balanced → powerful): score ≤ `cheapMax` (default `0.18`) → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` (default `0.35`) → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. With a classifier configured this step is skipped entirely: the classifier's verdict replaces the tier (and a transient classifier failure goes to `defaultRoute`, never a heuristic tier) — see below.
 3. **`defaultRoute`**.
 4. **`fallbacks`**, in order.

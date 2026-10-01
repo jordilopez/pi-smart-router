@@ -154,7 +154,10 @@ async function resolveFresh(
     const verdict = await runClassifier(registry, config, features, context, undefined, classifierStats);
     if (verdict) {
       classifierVerdict = verdict;
-      decision = resolveRoute(registry, config, features, context, verdict, false, true);
+      // Named booleans: no heuristic tier (the verdict decides), rules skipped.
+      const useHeuristicTier = false;
+      const skipRules = true;
+      decision = resolveRoute(registry, config, features, context, verdict, useHeuristicTier, skipRules);
     } else {
       decision = resolveRoute(registry, config, features, context, undefined, false);
     }
