@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { TIER_RUBRIC, ROUTE_EMOJI, type RouteTier } from "./types.js";
+import { TIER_RUBRIC, type RouteTier } from "./types.js";
 import { validateConfig } from "./config.js";
 import { jevTierClassification, resolveCollisions, applyTierFilters, type TierFilters, TIERS } from "./tier-classification.js";
 
@@ -426,7 +426,6 @@ export function registerTools(pi: ExtensionAPI): void {
     properties: {
       model: { type: "string", description: "Provider/model ID (e.g. 'hyper/glm-5.3-flash')" },
       reasoning: { type: "string", enum: ["preserve", "off", "low", "medium", "high"] },
-      emoji: { type: "string" },
     },
     required: ["model"],
   };
@@ -540,7 +539,7 @@ export function registerTools(pi: ExtensionAPI): void {
     },
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const { routes } = params as {
-        routes: Record<string, { model: string; reasoning?: string; emoji?: string }>;
+        routes: Record<string, { model: string; reasoning?: string }>;
       };
 
       // Reject unknown or malformed models before touching the config
@@ -724,7 +723,7 @@ export function registerTools(pi: ExtensionAPI): void {
         warnings.push(`unfilled tiers: ${unassigned.join(", ")} (not included in routes)`);
       }
 
-      const routes: Record<string, { model: string; reasoning: string; emoji: string }> = {};
+      const routes: Record<string, { model: string; reasoning: string }> = {};
       for (const tier of TIERS) {
         const pick = resolved[tier];
         if (!pick.model) continue;
@@ -733,7 +732,6 @@ export function registerTools(pi: ExtensionAPI): void {
         routes[routeName] = {
           model: `${pick.model.provider}/${pick.model.model}`,
           reasoning,
-          emoji: ROUTE_EMOJI[routeName] ?? "",
         };
       }
 

@@ -98,12 +98,10 @@ describe("smart-router-setup-tiers", () => {
     expect(details.routes["cheap-code"]).toEqual({
       model: "hyper/a-flash",
       reasoning: "preserve",
-      emoji: "🪙",
     });
     expect(details.routes.powerful).toEqual({
       model: "hyper/c-pro",
       reasoning: "high",
-      emoji: "💎",
     });
     expect(Array.isArray(details.warnings)).toBe(true);
   });

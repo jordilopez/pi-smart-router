@@ -116,7 +116,6 @@ Routes are only resolved when actually selected - backends that don't exist or a
       "model": "provider/modelId",    // required, must contain "/"
       "reasoning": "preserve",        // optional: preserve|off|low|medium|high
       "maxTokens": 32000,             // optional output cap (must fit the model)
-      "emoji": "🎯"                   // optional route glyph (max 8 code points; currently unused — kept for config compat)
     }
   },
   "classifier": {
@@ -282,7 +281,7 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 - **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Route decisions (which tier rule/classifier/threshold chose) are not surfaced in the UI; debug via the router `state` stored on the session branch if needed.
 - **No transcript noise** - route decisions are intentionally *not* appended to the transcript.
 
-> **Note:** The extension's former custom footer status line (route glyph, source, classifier stats) was removed in favor of pi's native footer. Route config `emoji` fields are still accepted in the config schema but currently unused.
+> **Note:** The extension's former custom footer status line (route glyph, source, classifier stats) was removed in favor of pi's native footer. The `emoji` route field is no longer part of the schema; legacy configs carrying it still load (the field is silently ignored).
 
 ## Troubleshooting
 
