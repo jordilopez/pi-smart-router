@@ -19,7 +19,7 @@ import { isClassifierAvailable, runClassifier } from "./classifier-orchestrator.
 import { classifierThresholds, isRouteAvailable, resolveRoute, tierForScore } from "./route-resolver.js";
 import { isContextOverflowError, parseModelRef } from "./backend.js";
 import { RouterError } from "./types.js";
-import type { PromptFeatures, RouteTier, RouterModelRegistry, SmartRouterConfig } from "./types.js";
+import type { PromptFeatures, RouteDecision, RouteTier, RouterModelRegistry, SmartRouterConfig } from "./types.js";
 import type { ClassifierStats } from "./typesafe-client.js";
 
 /** Extension context subset `route()` needs. */
@@ -39,20 +39,67 @@ export interface RouterVirtualState {
   classifierVerdict?: RouteTier;
 }
 
+/** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
+export const STATUS_KEY = "pi-smart-router";
+
+/** Footer status setter (optional; absent in non-interactive contexts/tests). */
+export type SetStatusCallback = (key: string, text: string | undefined) => void;
+
 interface RouterState {
   config: SmartRouterConfig;
+  setStatus?: SetStatusCallback;
 }
 
 let state: RouterState | null = null;
 
-/** Capture config — wired to "session_start". */
-export function initializeRouterState(options: { config: SmartRouterConfig }): void {
-  state = { config: options.config };
+/** Capture config and footer setter — wired to "session_start". */
+export function initializeRouterState(options: { config: SmartRouterConfig; setStatus?: SetStatusCallback }): void {
+  state = { config: options.config, setStatus: options.setStatus };
 }
 
-/** Clear state — wired to "session_shutdown". */
+/** Clear state — wired to "session_shutdown". Clears the footer status too. */
 export function shutdownRouterState(): void {
+  state?.setStatus?.(STATUS_KEY, undefined);
   state = null;
+}
+
+/** Built-in tier glyphs, shown in the footer status (tier visibility). */
+const TIER_GLYPHS: Record<RouteTier, string> = {
+  cheap: "🪙",
+  fast: "⚡",
+  balanced: "🎯",
+  powerful: "💎",
+};
+
+/** Glyph for a route: built-in tier glyphs by route name (incl. standard aliases), else by resolved tier. */
+const ROUTE_NAME_TIERS: Record<string, RouteTier> = {
+  ...({ cheap: "cheap", "cheap-code": "cheap", fast: "fast", balanced: "balanced", powerful: "powerful" } as const),
+};
+
+function glyphFor(decision: RouteDecision): string {
+  const tier = ROUTE_NAME_TIERS[decision.route] ?? decision.heuristicTier ?? decision.classifierVerdict ?? "balanced";
+  return TIER_GLYPHS[tier];
+}
+
+/**
+ * Format the compact footer status: tier visibility only.
+ *
+ * Shape: `<glyph> <route>[ · <source>]` — e.g. `⚡ fast · classifier`.
+ * The routed backend model and thinking level come from pi's native
+ * virtual-model footer; the complexity score and classifier stats are
+ * deliberately omitted.
+ */
+export function formatTierStatus(decision: RouteDecision): string {
+  const glyph = glyphFor(decision);
+  let source: string | undefined;
+  if (decision.matchedRule) {
+    source = `rule:${decision.matchedRule}`;
+  } else if (decision.classifierVerdict) {
+    source = "classifier";
+  } else if (decision.reason !== "threshold") {
+    source = decision.reason;
+  }
+  return source ? `${glyph} ${decision.route} · ${source}` : `${glyph} ${decision.route}`;
 }
 
 /** Thinking level for a routed route config: explicit override, else passthrough. */
@@ -96,6 +143,7 @@ async function resolveFresh(
   const classifierStats: ClassifierStats = {};
   let classifierVerdict: RouteTier | undefined;
   if (classifierActive && decision.reason !== "rule") {
+    state?.setStatus?.(STATUS_KEY, "… classifying");
     const verdict = await runClassifier(registry, config, features, context, undefined, classifierStats);
     if (verdict) {
       classifierVerdict = verdict;
@@ -107,6 +155,10 @@ async function resolveFresh(
   if (classifierVerdict && (classifierStats.elapsedMs !== undefined || classifierStats.inputTokens !== undefined)) {
     decision.classifierStats = classifierStats;
   }
+
+  // Footer: tier visibility (glyph + route + source). Backend model and
+  // thinking level are shown by pi's native virtual-model footer.
+  state?.setStatus?.(STATUS_KEY, formatTierStatus(decision));
 
   return {
     model: findBackendModel(registry, decision.backendModel),

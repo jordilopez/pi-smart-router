@@ -34,7 +34,12 @@ export default function (pi: ExtensionAPI): void {
     const trusted = ctx.isProjectTrusted();
     try {
       const result = await loadSmartRouterConfig({ projectTrusted: trusted, cwd: ctx.cwd });
-      initializeRouterState({ config: result.config });
+      initializeRouterState({
+        config: result.config,
+        // Tier visibility in the footer. Bound closures only — no whole
+        // ExtensionContext is retained.
+        setStatus: (key, text) => ctx.ui.setStatus(key, text),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // stderr is only safe outside the TUI (print/JSON mode); in the TUI the
