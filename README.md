@@ -309,4 +309,4 @@ npx tsc --noEmit   # typecheck (resolves pi packages via tsconfig paths)
 npx vitest run     # unit tests (classifier, route resolver, config, stream contract)
 ```
 
-The typecheck/tests resolve `@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` from the installed Pi CLI (see `tsconfig.json` paths and `vitest.config.ts`); override with `PI_PACKAGE_DIR` if your Pi install lives elsewhere.
+The typecheck/tests resolve `@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` from the devDependency install in `node_modules/` (same on CI — see `.github/workflows/test.yml`); override with `PI_PACKAGE_DIR` to test against a different pi install.
