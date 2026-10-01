@@ -1,59 +1,30 @@
 /**
  * Smart Router extension entry point.
  *
- * Registers the "pi-smart-router" custom provider (selectable via
- * /model pi-smart-router/auto) and wires lifecycle events:
- * - session_start: capture the model registry/cwd/trust/session id, load
- *   routing config, and bind the footer status callback
- * - turn_start: reset the per-turn cached route decision (footer shows
- *   "classifying…" until the decision replaces it)
- * - session_shutdown: clear all router state and the footer status
+ * Registers the "pi-smart-router/auto" virtual model (selectable via /model)
+ * and wires lifecycle events:
+ * - session_start: load routing config and capture the footer status callback
+ * - session_shutdown: clear all router state
+ *
+ * Dispatch is native: the virtual model's route() picks a physical backend
+ * model and pi streams from it directly.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadSmartRouterConfig } from "./config.js";
-import {
-  getRouterState,
-  initializeRouter,
-  onTurnStart,
-  shutdownRouter,
-  streamSmartRouter,
-} from "./provider.js";
+import { initializeRouterState, routeRequest, shutdownRouterState } from "./virtual-router.js";
 import { registerTools } from "./tools.js";
 
-/**
- * The single registered router model.
- *
- * "auto" is a virtual model: routing decisions use each backend model's own
- * contextWindow (see route-resolver.ts), so this value only affects pi core's
- * view of the router (UI display and compaction triggering). It is declared as
- * 1M to mirror the configured 1M-context backends; a smaller value would make
- * pi compact conversations long before the backends were actually full.
- */
-const ROUTER_MODELS = [
-  {
+export default function (pi: ExtensionAPI): void {
+  pi.registerVirtualModel({
+    provider: "pi-smart-router",
     id: "auto",
     name: "Smart Router (Auto)",
-    reasoning: true,
-    input: ["text", "image"] as ("text" | "image")[],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1_000_000,
-    maxTokens: 64000,
-  },
-];
-
-export default function (pi: ExtensionAPI): void {
-  // Legacy config-form registration (same shape as the gitlab-duo example).
-  // The baseUrl is a placeholder - the router never contacts it; it delegates
-  // to backend providers via the model registry. The apiKey is a sentinel so
-  // the model is selectable; it is never forwarded to backends.
-  pi.registerProvider("pi-smart-router", {
-    name: "Smart Router",
-    baseUrl: "http://localhost",
-    apiKey: "pi-smart-router",
-    api: "pi-smart-router-api",
-    models: ROUTER_MODELS,
-    streamSimple: streamSmartRouter,
+    thinkingLevels: ["off", "low", "medium", "high"],
+    input: ["text", "image"],
+    async route(request, ctx) {
+      return routeRequest(request, { modelRegistry: ctx.modelRegistry as never });
+    },
   });
 
   // Register tools for the model-tier-setup skill
@@ -63,19 +34,10 @@ export default function (pi: ExtensionAPI): void {
     const trusted = ctx.isProjectTrusted();
     try {
       const result = await loadSmartRouterConfig({ projectTrusted: trusted, cwd: ctx.cwd });
-      const sessionId = ctx.sessionManager.getSessionId();
-      initializeRouter({
-        registry: ctx.modelRegistry,
+      initializeRouterState({
         config: result.config,
-        // Stable session id forwarded to backends that require it (Console Go
-        // requires x-opencode-session). Cleared again on session_shutdown.
-        sessionId,
-        // Turn numbering continues across config reloads (session_start fires
-        // again with reason "reload" and re-runs this handler). A fresh
-        // session starts at 0 because session_shutdown cleared the state.
-        turnNumber: getRouterState()?.turnNumber ?? 0,
-        // Route visibility: footer status only.
-        // Bound closures only - no whole ExtensionContext is retained.
+        // Tier visibility in the footer. Bound closures only — no whole
+        // ExtensionContext is retained.
         setStatus: (key, text) => ctx.ui.setStatus(key, text),
       });
     } catch (error) {
@@ -87,12 +49,8 @@ export default function (pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("turn_start", () => {
-    onTurnStart();
-  });
-
   pi.on("session_shutdown", () => {
-    shutdownRouter();
+    shutdownRouterState();
   });
 
   // Config reload: session_start fires again with reason "reload" and re-runs

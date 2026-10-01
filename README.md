@@ -1,6 +1,8 @@
 # pi Smart Router
 
-A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a custom provider, `pi-smart-router`, with a single model `pi-smart-router/auto`. Each prompt is classified once per turn and routed through a **four-tier** resolver to the best configured **backend model** through Pi's model registry.
+A [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension that registers a **virtual model**, `pi-smart-router/auto`, via pi's virtual-model API. Each prompt is classified once per turn and routed through a **four-tier** resolver to the best configured **backend model**; pi streams from the backend natively.
+
+Requires **pi ≥ v0.99.0** (virtual models, `pi.registerVirtualModel`).
 
 Classification and execution are separate concerns: the selected backend LLM performs the actual work, while the tier is chosen by a **classifier** — the recommended setup uses [TypeSafe Jev](#typesafe-jev-setup) (or any one-shot LLM); without it, a built-in keyword heuristic (English-oriented, no semantic understanding) picks the tier. The `fast` backend is **not** used as a judge unless you explicitly configure it as the classifier.
 
@@ -9,11 +11,11 @@ pi -e ./src/index.ts
 # then: /model pi-smart-router/auto
 ```
 
-> **Note:** The default configuration, examples, and testing have only used the `opencode-go` provider. Other providers *may* work but are untested; the session header injection (`x-opencode-session`) is currently `opencode-go`-specific.
+> **Note:** The default configuration, examples, and testing have only used the `opencode-go` provider. Other providers *may* work but are untested. Session attribution headers for opencode providers are injected natively by pi core.
 
 ## The four tiers (recommended policy)
 
-All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer keeps showing `pi-smart-router/auto`; the footer status line names the backend that actually served each turn.
+All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer shows the routed backend natively: `auto • high → <provider>/<model> • level`.
 
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
@@ -77,7 +79,7 @@ Use `pi install -l /path/to/pi-smart-router` only for a project-local installati
 
 The extension loads as plain TypeScript (Pi loads extensions via jiti) - no build step. `zod` is a runtime dependency; TypeScript and Vitest are only needed for development.
 
-> **Note:** `pi-smart-router/auto` is a virtual model (never contacted). Its declared 1M context window is only for Pi's UI and compaction — the resolver checks each backend's own window (×0.8) when routing.
+> **Note:** `pi-smart-router/auto` is a native pi virtual model: it is never contacted and declares no context limits — pi tracks and compacts against the **dispatched backend model's** limits (per physical model, per `/session` cost accounting).
 
 ### Selecting the router model
 
@@ -114,7 +116,6 @@ Routes are only resolved when actually selected - backends that don't exist or a
       "model": "provider/modelId",    // required, must contain "/"
       "reasoning": "preserve",        // optional: preserve|off|low|medium|high
       "maxTokens": 32000,             // optional output cap (must fit the model)
-      "emoji": "🎯"                   // optional footer glyph (max 8 code points)
     }
   },
   "classifier": {
@@ -164,14 +165,19 @@ User keywords in rules are matched as **escaped literal phrases** (case-insensit
 
 ## Routing decision order
 
-For each new turn (re-classified only on `turn_start`):
+For each new user turn (tool-call continuations and retries reuse the turn's backend — see below):
 
-1. **Explicit rules**, highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues.
+1. **Explicit rules** — heuristic mode only. Highest `priority` first. A matching rule is used only if its route resolves to an available + compatible backend; otherwise evaluation continues. With a classifier configured and available, rules are **skipped entirely** (the verdict decides); they apply again when the classifier fails.
 2. **Complexity thresholds — heuristic mode only** (cheap → fast → balanced → powerful): score ≤ `cheapMax` (default `0.18`) → route named `cheap`/`cheap-code`/`low-cost`/`economy`; ≤ `simpleMax` (default `0.35`) → `fast`/`simple`/...; ≤ `mediumMax` → `balanced`/...; above `mediumMax` → `powerful`/.... Alias matching is exact-name first, then name-segment match (e.g. `my-cheap-code-route` matches the cheap tier, but `fastest` does not match `fast`). If the tier route doesn't exist or is unavailable, fall through to `defaultRoute`. With a classifier configured this step is skipped entirely: the classifier's verdict replaces the tier (and a transient classifier failure goes to `defaultRoute`, never a heuristic tier) — see below.
 3. **`defaultRoute`**.
 4. **`fallbacks`**, in order.
 5. **Any available route** (declaration order).
-6. If nothing is available: stream error `NO_FALLBACK_AVAILABLE`.
+6. If nothing is available: routing error `NO_FALLBACK_AVAILABLE`.
+
+**Continuations and retries** (pi's virtual-model contract, not re-classification):
+
+- Tool-call continuations dispatch to the model that handled the turn (`request.previous`), keeping prompt caches and thinking signatures valid.
+- Automatic retries after a failed request stick to the failed model for transient errors; on a context-overflow or provider-overload signature the router advances through `defaultRoute`/`fallbacks` skipping the failed model.
 
 **Compatibility checks** before a route is accepted:
 
@@ -186,10 +192,12 @@ For each new turn (re-classified only on `turn_start`):
 Keyword thresholds are fast and free but blind to meaning — and English-only —
 so semantically equal prompts can land on opposite sides of a tier boundary.
 **Configure a classifier** (`classifier.model`) and it classifies **every** new
-turn; its verdict is final (any tier, including `powerful`). Without it the
+turn; its verdict is final (any tier, including `powerful`) and configured
+rules do **not** apply — rules drive routing only in heuristic mode (no
+classifier configured or available) or when the classifier fails to return a
+verdict. Without it the
 router falls back to the heuristic score: deterministic, no API key needed,
-but keyword-based and English-oriented. Either way, explicit rules always win
-first.
+but keyword-based and English-oriented.
 
 Two backends:
 
@@ -272,13 +280,14 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 
 ## Route visibility in Pi's UI
 
-- **Footer status** - after each route decision the footer shows the active backend and how the tier was chosen, e.g. `🎯 balanced · <provider>/<balanced-model> · threshold`, `⚡ fast · <provider>/<fast-model> · classifier`, or `💎 powerful · <provider>/<powerful-model> · classifier`. When the classifier reports usage, its cost is appended: `· 742ms/350i/47o`. The heuristic complexity score is intentionally omitted (it does not select the tier when a classifier is configured). The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down. This is enabled by default.
-- **No transcript noise** - route decisions are intentionally *not* appended to the transcript; the footer status is the single source of that information.
-- **Footer model unchanged** - Pi's normal footer model remains `pi-smart-router/auto`; the footer status line above is where you see which backend actually served the turn.
+- **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Additionally, a compact footer status shows the routing tier: `⚡ fast`, `🪙 cheap-code · rule:typos`, `💎 powerful · classifier`, or `⚡ fast · retry-fallback` when a retry switched backends. It briefly shows `… classifying` while the classifier runs, and is cleared on session shutdown.
+- **No transcript noise** - route decisions are intentionally *not* appended to the transcript.
+
+> **Note:** The extension's former verbose footer status line (backend model, classifier stats) was removed in favor of pi's native footer; the compact tier line above is all that remains. The `emoji` route field is no longer part of the schema; legacy configs carrying it still load (the field is silently ignored).
 
 ## Troubleshooting
 
-- **`400 MissingSessionID: Request is missing x-opencode-session`** - Console Go (opencode-go) requires a session header to route requests efficiently. The router forwards Pi's **stable session id** (captured on `session_start` from `ctx.sessionManager.getSessionId()`) as the `x-opencode-session` header on every opencode-go request, so the value stays constant across prompts and tool continuations. If the caller already supplies its own `x-opencode-session` header or `options.sessionId`, that explicit value wins and is forwarded as-is. The header is only injected for `opencode-go` - other providers are untouched.
+- **`400 MissingSessionID: Request is missing x-opencode-session`** - Console Go (opencode-go) requires a session header to route requests efficiently. Pi core injects session attribution headers for opencode/opencode-go providers natively (and has since v0.99); update pi if you see this error.
 - **`No credentials configured for provider 'opencode-go'`** - auth missing. Run `pi auth opencode-go`, set `OPENCODE_API_KEY`, or use `/login opencode-go`.
 - **`Model not found in registry: provider/modelId`** — the route references a model Pi doesn't know. Check spelling (model IDs are exact and lowercase) and run `pi --list-models <provider>` to see the catalog.
 - **`No compatible backend model available for any configured route`** - every route failed the availability/compatibility checks (missing auth, model missing, context window too small for the current conversation, etc.).
@@ -289,7 +298,7 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 
 - Token counts are **heuristics** (`chars/4`, images ≈ 512 tokens); treat thresholds as approximate.
 - `reasoning: "off"` cannot force-disable thinking on providers that always think; it only avoids requesting reasoning. `preserve` keeps the session's thinking level.
-- Backend availability is evaluated when the decision is made; a backend that dies mid-turn surfaces as a stream error (no mid-turn failover).
+- Backend availability is evaluated when the decision is made. Mid-turn failures surface as stream errors; the next automatic **retry** re-enters the router, which switches backends on overflow/overload signatures (see [Routing decision order](#routing-decision-order)).
 - The router does not evaluate answer quality or test outcomes after a turn starts.
 
 ## Development
@@ -300,4 +309,4 @@ npx tsc --noEmit   # typecheck (resolves pi packages via tsconfig paths)
 npx vitest run     # unit tests (classifier, route resolver, config, stream contract)
 ```
 
-The typecheck/tests resolve `@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` from the installed Pi CLI (see `tsconfig.json` paths and `vitest.config.ts`); override with `PI_PACKAGE_DIR` if your Pi install lives elsewhere.
+The typecheck/tests resolve `@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent` from the devDependency install in `node_modules/` (same on CI — see `.github/workflows/test.yml`); override with `PI_PACKAGE_DIR` to test against a different pi install.

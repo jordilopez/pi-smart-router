@@ -2,9 +2,10 @@
  * Classifier orchestration for the Smart Router.
  *
  * When `classifier.model` is configured, that backend classifies every new turn
- * into a routing tier (cheap/fast/balanced/powerful). Explicit rules always win
- * first. When no model is configured, the router falls back to the heuristic
- * score and this module is never called.
+ * into a routing tier (cheap/fast/balanced/powerful). Its verdict is final —
+ * rules do not apply when it succeeds (classifier-first, enforced by the route
+ * handler via `skipRules`). When no model is configured, the router falls back
+ * to the heuristic score and this module is never called.
  *
  * Failure philosophy: classification is best-effort. A configured classifier
  * whose backend is unavailable up front (a `typesafe-ai/*` ref with no
@@ -232,7 +233,14 @@ export async function classifyWithLlm(
   // the background until the abort takes effect; it must never reject.
   const consumePromise = (async (): Promise<boolean> => {
     try {
-      const inner = backend.provider.streamSimple(delegationModel, classifierContext, streamOptions);
+      // buildTranscript produces a plain Context; pi 0.99 brands the
+      // streamSimple transcript parameter as TranscriptContext (same shape,
+      // branded). Cast through unknown until the builder returns the brand.
+      const inner = backend.provider.streamSimple(
+        delegationModel,
+        classifierContext as unknown as Parameters<typeof backend.provider.streamSimple>[1],
+        streamOptions,
+      );
       for await (const event of inner as AsyncIterable<AssistantMessageEvent>) {
         if (event.type === "text_delta") {
           const delta = (event as { delta?: string }).delta;

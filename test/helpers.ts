@@ -32,6 +32,8 @@ export interface FakeRegistryOptions {
   auth?: ResolvedRequestAuth;
   /** Providers to omit from getProvider */
   missingProviders?: string[];
+  /** Stable provider instance returned by getProvider (default: fresh per call). */
+  stableProvider?: Provider;
   /** Observation hook for find() calls (for call-count assertions) */
   onFind?: (provider: string, modelId: string) => void;
   /** Provider headers returned by getProvider */
@@ -45,6 +47,8 @@ export class FakeRegistry implements RouterModelRegistry {
   auth: ResolvedRequestAuth;
   readonly onFind?: (provider: string, modelId: string) => void;
   providerHeaders?: Record<string, string | null>;
+  /** Stable provider instance returned by getProvider (default: fresh per call). */
+  stableProvider?: Provider;
   findCalls = 0;
 
   constructor(options: FakeRegistryOptions = {}) {
@@ -54,6 +58,7 @@ export class FakeRegistry implements RouterModelRegistry {
     this.auth = options.auth ?? { ok: true, apiKey: "test-key", headers: { "x-test": "1" } };
     this.onFind = options.onFind;
     this.providerHeaders = options.providerHeaders;
+    this.stableProvider = options.stableProvider;
   }
 
   find(provider: string, modelId: string): Model<Api> | undefined {
@@ -64,7 +69,7 @@ export class FakeRegistry implements RouterModelRegistry {
 
   getProvider(provider: string): Provider | undefined {
     if (this.missingProviders.has(provider)) return undefined;
-    return makeFakeProvider({ headers: this.providerHeaders });
+    return this.stableProvider ?? makeFakeProvider({ headers: this.providerHeaders });
   }
 
   hasConfiguredAuth(model: Model<Api>): boolean {

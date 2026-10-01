@@ -189,7 +189,8 @@ export function findRouteByTier(
  * Resolve the route for a classified prompt. Throws RouterError when nothing is available.
  *
  * `tierOverride` (the classifier's verdict) replaces the score-computed tier
- * at the threshold step only; explicit rules still win first. Any tier may be
+ * at the threshold step only; rules win unless the caller passes `skipRules`
+ * (classifier-first mode, where the verdict decides). Any tier may be
  * supplied; when the classifier is configured its verdict is final.
  */
 export function resolveRoute(
@@ -199,13 +200,15 @@ export function resolveRoute(
   context: Context,
   tierOverride?: RouteTier,
   useHeuristicTier = true,
+  skipRules = false,
 ): RouteDecision {
   const promptText = getLatestUserPrompt(context);
   const score = features.complexityScore;
 
   // 1. Explicit rules, highest priority first. On match, use the route only
-  //    if it is available; otherwise continue to the next rule.
-  const sortedRules = [...(config.rules ?? [])].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  //    if it is available; otherwise continue to the next rule. Skipped in
+  //    classifier-first mode when a verdict exists (the verdict decides).
+  const sortedRules = skipRules ? [] : [...(config.rules ?? [])].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
   for (const rule of sortedRules) {
     if (!matchRule(rule, features, promptText)) continue;
     const routeConfig = config.routes[rule.route];
