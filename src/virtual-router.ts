@@ -16,8 +16,8 @@ import type { Api, Context, Model, ModelThinkingLevel } from "@earendil-works/pi
 import type { ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { classifyPrompt } from "./classifier.js";
 import { isClassifierAvailable, runClassifier } from "./classifier-orchestrator.js";
-import { classifierThresholds, resolveRoute, tierForScore } from "./route-resolver.js";
-import { parseModelRef } from "./backend.js";
+import { classifierThresholds, isRouteAvailable, resolveRoute, tierForScore } from "./route-resolver.js";
+import { isContextOverflowError, parseModelRef } from "./backend.js";
 import { ROUTE_EMOJI, RouterError } from "./types.js";
 import type { PromptFeatures, RouteDecision, RouteTier, RouterModelRegistry, SmartRouterConfig } from "./types.js";
 import type { ClassifierStats } from "./typesafe-client.js";
@@ -173,6 +173,67 @@ export function formatDecisionStatus(decision: RouteDecision): string {
   return `${glyph} ${decision.route} · ${decision.backendModel} · ${source}${stats}`;
 }
 
+// ============================================================================
+// Retry routing
+// ============================================================================
+
+/** Error signatures that justify switching backends on an automatic retry. */
+const OVERLOAD_PATTERNS = ["overloaded", "rate limit", "rate_limit", "capacity", "529"];
+
+/** Whether a failed request's error suggests a different backend would help. */
+function shouldSwitchOnRetry(errorMessage: string | undefined): boolean {
+  if (!errorMessage) return false;
+  const lower = errorMessage.toLowerCase();
+  return isContextOverflowError(lower) || OVERLOAD_PATTERNS.some((p) => lower.includes(p));
+}
+
+/**
+ * Route a retry: stick to the failed model for transient errors; on overflow
+ * or provider overload, advance through the configured route order
+ * (defaultRoute, then fallbacks, then any route) skipping the failed model.
+ */
+function routeRetry(
+  registry: RouterModelRegistry,
+  config: SmartRouterConfig,
+  request: ModelRouteRequest,
+  context: Context,
+): ModelRoute {
+  const failed = request.failed!;
+  const failedRef = `${failed.model.provider}/${failed.model.id}`;
+
+  if (!shouldSwitchOnRetry(failed.message.errorMessage)) {
+    // Transient failure: same backend, same level, state unchanged.
+    return {
+      model: failed.model as Model<never>,
+      thinkingLevel: failed.thinkingLevel ?? request.thinkingLevel,
+      state: request.state,
+    };
+  }
+
+  const features = classifyPrompt(context, config.classifier ?? {});
+  const routeNames = [
+    config.defaultRoute,
+    ...(config.fallbacks ?? []),
+    ...Object.keys(config.routes),
+  ];
+  for (const name of routeNames) {
+    const routeConfig = config.routes[name];
+    if (!routeConfig || routeConfig.model === failedRef) continue;
+    if (!isRouteAvailable(registry, name, routeConfig, features)) continue;
+    return {
+      model: findBackendModel(registry, routeConfig.model),
+      thinkingLevel: thinkingLevelFor(routeConfig.reasoning, request.thinkingLevel),
+      state: request.state,
+    };
+  }
+
+  throw new RouterError(
+    "NO_FALLBACK_AVAILABLE",
+    `Retry after failure of ${failedRef}: no other compatible backend available`,
+    { failedModel: failedRef },
+  );
+}
+
 /**
  * The virtual model's route callback. See docs/virtual-models.md for the
  * request contract.
@@ -193,7 +254,12 @@ export async function routeRequest(request: ModelRouteRequest, ctx: RouteContext
     };
   }
 
-  // Task 1 scope: retries and direct requests take a fresh resolution.
-  // Retry-specific fallback selection (request.failed) lands in Task 3.
+  // Retries: switch backends on overflow/overload, stick on transient errors.
+  if (request.reason === "retry" && request.failed) {
+    return routeRetry(ctx.modelRegistry, config, request, { systemPrompt: "", messages: request.messages } as Context);
+  }
+
+  // Direct requests (compaction summaries, extension calls) take a fresh
+  // resolution; pi ignores state returned for direct requests.
   return resolveFresh(ctx.modelRegistry, config, request, { systemPrompt: "", messages: request.messages } as Context);
 }

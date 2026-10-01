@@ -199,3 +199,106 @@ describe("routeRequest — reason: continuation", () => {
     expect(route.model.id).toBe("deepseek-v4-flash");
   });
 });
+
+// ============================================================================
+// reason: "retry"
+// ============================================================================
+
+describe("routeRequest — reason: retry", () => {
+  const balancedModel = makeModel({ provider: "opencode-go", id: "gpt-5.6-luna" });
+  const fastModel = makeModel({ provider: "opencode-go", id: "deepseek-v4-flash" });
+  const cheapModel = makeModel({ provider: "opencode-go", id: "mimo-v2.5" });
+
+  function retryRegistry(): FakeRegistry {
+    return new FakeRegistry({ models: [balancedModel, fastModel, cheapModel] });
+  }
+
+  function failedMessage(errorMessage: string) {
+    return {
+      role: "assistant" as const,
+      content: [],
+      api: "anthropic-messages" as const,
+      provider: "opencode-go",
+      model: "gpt-5.6-luna",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "error" as const,
+      errorMessage,
+      timestamp: Date.now(),
+    };
+  }
+
+  beforeEach(() => {
+    initializeRouterState({ config: testConfig() });
+  });
+
+  afterEach(() => {
+    shutdownRouterState();
+  });
+
+  it("switches to the next fallback on a context-overflow failure", async () => {
+    // failed.model is the balanced route's backend; defaultRoute is balanced.
+    // On overflow the route must move off the full model to a fallback.
+    const route = await routeRequest(
+      makeRequest({
+        reason: "retry",
+        failed: { model: balancedModel, thinkingLevel: "medium", message: failedMessage("maximum context length exceeded") },
+      }),
+      makeCtx(retryRegistry()),
+    );
+    expect(route.model.id).not.toBe("gpt-5.6-luna");
+    expect(route.model.id).toBe("deepseek-v4-flash"); // first fallback: fast
+  });
+
+  it("switches to the next fallback on a provider-overload failure", async () => {
+    const route = await routeRequest(
+      makeRequest({
+        reason: "retry",
+        failed: { model: balancedModel, thinkingLevel: "medium", message: failedMessage("provider is overloaded, try again later") },
+      }),
+      makeCtx(retryRegistry()),
+    );
+    expect(route.model.id).toBe("deepseek-v4-flash");
+  });
+
+  it("sticks to the failed model on a transient failure", async () => {
+    const route = await routeRequest(
+      makeRequest({
+        reason: "retry",
+        failed: { model: balancedModel, thinkingLevel: "medium", message: failedMessage("connection reset by peer") },
+      }),
+      makeCtx(retryRegistry()),
+    );
+    expect(route.model.id).toBe("gpt-5.6-luna");
+  });
+
+  it("keeps the router state when sticking to the failed model", async () => {
+    const priorState = { backendModel: "opencode-go/gpt-5.6-luna", route: "balanced" };
+    const route = await routeRequest(
+      makeRequest({
+        reason: "retry",
+        state: priorState,
+        failed: { model: balancedModel, thinkingLevel: "medium", message: failedMessage("connection reset by peer") },
+      }),
+      makeCtx(retryRegistry()),
+    );
+    expect(route.state).toEqual(priorState);
+  });
+
+  it("throws NO_FALLBACK_AVAILABLE when the failed model is the only backend", async () => {
+    const registry = new FakeRegistry({ models: [balancedModel] });
+    await expect(
+      routeRequest(
+        makeRequest({
+          reason: "retry",
+          failed: { model: balancedModel, thinkingLevel: "medium", message: failedMessage("provider is overloaded") },
+        }),
+        makeCtx(registry),
+      ),
+    ).rejects.toMatchObject({ code: "NO_FALLBACK_AVAILABLE" });
+  });
+
+  it("resolves fresh when failed is absent (router itself failed last time)", async () => {
+    const route = await routeRequest(makeRequest({ reason: "retry" }), makeCtx(retryRegistry()));
+    expect(route.model).toBeDefined();
+  });
+});
