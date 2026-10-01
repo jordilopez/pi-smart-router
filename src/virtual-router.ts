@@ -18,8 +18,8 @@ import { classifyPrompt } from "./classifier.js";
 import { isClassifierAvailable, runClassifier } from "./classifier-orchestrator.js";
 import { classifierThresholds, isRouteAvailable, resolveRoute, tierForScore } from "./route-resolver.js";
 import { isContextOverflowError, parseModelRef } from "./backend.js";
-import { ROUTE_EMOJI, RouterError } from "./types.js";
-import type { PromptFeatures, RouteDecision, RouteTier, RouterModelRegistry, SmartRouterConfig } from "./types.js";
+import { RouterError } from "./types.js";
+import type { PromptFeatures, RouteTier, RouterModelRegistry, SmartRouterConfig } from "./types.js";
 import type { ClassifierStats } from "./typesafe-client.js";
 
 /** Extension context subset `route()` needs. */
@@ -39,28 +39,21 @@ export interface RouterVirtualState {
   classifierVerdict?: RouteTier;
 }
 
-/** Footer status setter (optional; absent in non-interactive contexts/tests). */
-export type SetStatusCallback = (key: string, text: string | undefined) => void;
 interface RouterState {
   config: SmartRouterConfig;
-  setStatus?: SetStatusCallback;
 }
 
 let state: RouterState | null = null;
 
-/** Capture config (and footer setter) — wired to "session_start". */
-export function initializeRouterState(options: { config: SmartRouterConfig; setStatus?: SetStatusCallback }): void {
-  state = { config: options.config, setStatus: options.setStatus };
+/** Capture config — wired to "session_start". */
+export function initializeRouterState(options: { config: SmartRouterConfig }): void {
+  state = { config: options.config };
 }
 
-/** Clear state — wired to "session_shutdown". Clears the footer status too. */
+/** Clear state — wired to "session_shutdown". */
 export function shutdownRouterState(): void {
-  state?.setStatus?.(STATUS_KEY, undefined);
   state = null;
 }
-
-/** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
-export const STATUS_KEY = "pi-smart-router";
 
 /** Thinking level for a routed route config: explicit override, else passthrough. */
 function thinkingLevelFor(routeReasoning: SmartRouterConfig["routes"][string]["reasoning"], selected: ModelThinkingLevel): ModelThinkingLevel {
@@ -103,7 +96,6 @@ async function resolveFresh(
   const classifierStats: ClassifierStats = {};
   let classifierVerdict: RouteTier | undefined;
   if (classifierActive && decision.reason !== "rule") {
-    state?.setStatus?.(STATUS_KEY, "router: classifying…");
     const verdict = await runClassifier(registry, config, features, context, undefined, classifierStats);
     if (verdict) {
       classifierVerdict = verdict;
@@ -116,10 +108,6 @@ async function resolveFresh(
     decision.classifierStats = classifierStats;
   }
 
-  // Footer diagnostics: replace the "classifying…" placeholder with the
-  // decision (source + classifier stats). Routed-model display is native.
-  state?.setStatus?.(STATUS_KEY, formatDecisionStatus(decision));
-
   return {
     model: findBackendModel(registry, decision.backendModel),
     thinkingLevel: thinkingLevelFor(decision.routeConfig.reasoning, request.thinkingLevel),
@@ -131,40 +119,6 @@ async function resolveFresh(
       classifierVerdict,
     },
   };
-}
-
-/**
- * Format the footer status line for a routing decision.
- *
- * Shape: `<glyph> <route> · <backendModel> · <source>[ · <elapsed>ms/<in>i/<out>o]`,
- * where source is `rule:<id>` for matched rules, `classifier[ <from>→<to>]` when
- * the classifier ran, or the resolver reason otherwise. When the classifier ran
- * and reported stats, its cost is appended. Never includes prompt text.
- *
- * Covers only classifier diagnostics — the routed-model display comes from
- * pi's native virtual-model footer.
- */
-export function formatDecisionStatus(decision: RouteDecision): string {
-  const glyph = decision.routeConfig.emoji ?? ROUTE_EMOJI[decision.route] ?? "↳";
-  let source: string;
-  if (decision.matchedRule) {
-    source = `rule:${decision.matchedRule}`;
-  } else if (decision.classifierVerdict) {
-    source = "classifier";
-  } else {
-    source = decision.reason;
-  }
-  let stats = "";
-  const cs = decision.classifierStats;
-  if (cs) {
-    const parts: string[] = [];
-    if (cs.elapsedMs !== undefined) parts.push(`${cs.elapsedMs}ms`);
-    if (cs.inputTokens !== undefined || cs.outputTokens !== undefined) {
-      parts.push(`${cs.inputTokens ?? "?"}i/${cs.outputTokens ?? "?"}o`);
-    }
-    if (parts.length > 0) stats = ` · ${parts.join("/")}`;
-  }
-  return `${glyph} ${decision.route} · ${decision.backendModel} · ${source}${stats}`;
 }
 
 // ============================================================================

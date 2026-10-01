@@ -15,7 +15,7 @@ pi -e ./src/index.ts
 
 ## The four tiers (recommended policy)
 
-All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer shows the routed backend natively: `auto • high → <provider>/<model> • level`. The extension's footer status line additionally names the routing source (rule/classifier/threshold).
+All routes use pi's built-in `opencode-go` provider (auth: `OPENCODE_API_KEY`, `pi auth opencode-go`, or `/login opencode-go`). Pi's footer shows the routed backend natively: `auto • high → <provider>/<model> • level`.
 
 | Tier | Route | Backend | Intent |
 |---|---|---|---|
@@ -116,7 +116,7 @@ Routes are only resolved when actually selected - backends that don't exist or a
       "model": "provider/modelId",    // required, must contain "/"
       "reasoning": "preserve",        // optional: preserve|off|low|medium|high
       "maxTokens": 32000,             // optional output cap (must fit the model)
-      "emoji": "🎯"                   // optional footer glyph (max 8 code points)
+      "emoji": "🎯"                   // optional route glyph (max 8 code points; currently unused — kept for config compat)
     }
   },
   "classifier": {
@@ -279,8 +279,10 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 
 ## Route visibility in Pi's UI
 
-- **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Additionally, after each fresh route decision the extension's footer status names the backend and how the tier was chosen: `🎯 balanced · <provider>/<balanced-model> · threshold`, `⚡ fast · <provider>/<fast-model> · classifier`, or `💎 powerful · <provider>/<powerful-model> · classifier`. When the classifier reports usage, its cost is appended: `· 742ms/350i/47o`. The leading glyph is the route's configured `emoji`, or the built-in glyph for the standard route names (⚡ fast, 🪙 cheap-code, 🎯 balanced, 💎 powerful). Custom routes without an `emoji` fall back to `↳`. On a new turn it briefly shows `router: classifying…` until the decision replaces it, and it is cleared when the session shuts down.
-- **No transcript noise** - route decisions are intentionally *not* appended to the transcript; the footer is the single source of that information.
+- **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Route decisions (which tier rule/classifier/threshold chose) are not surfaced in the UI; debug via the router `state` stored on the session branch if needed.
+- **No transcript noise** - route decisions are intentionally *not* appended to the transcript.
+
+> **Note:** The extension's former custom footer status line (route glyph, source, classifier stats) was removed in favor of pi's native footer. Route config `emoji` fields are still accepted in the config schema but currently unused.
 
 ## Troubleshooting
 
