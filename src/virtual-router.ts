@@ -59,16 +59,6 @@ export function shutdownRouterState(): void {
   state = null;
 }
 
-/** Test/diagnostic accessor. */
-export function getRouterState(): Readonly<RouterState> | null {
-  return state;
-}
-
-/** Test hook: seed state without a real pi session. */
-export function setRouterStateForTesting(next: RouterState | null): void {
-  state = next;
-}
-
 /** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
 export const STATUS_KEY = "pi-smart-router";
 
