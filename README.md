@@ -278,10 +278,10 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 
 ## Route visibility in Pi's UI
 
-- **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Route decisions (which tier rule/classifier/threshold chose) are not surfaced in the UI; debug via the router `state` stored on the session branch if needed.
+- **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Additionally, a compact footer status shows the routing tier: `⚡ fast`, `🪙 cheap-code · rule:typos`, `💎 powerful · classifier`, or `⚡ fast · retry-fallback` when a retry switched backends. It briefly shows `… classifying` while the classifier runs, and is cleared on session shutdown.
 - **No transcript noise** - route decisions are intentionally *not* appended to the transcript.
 
-> **Note:** The extension's former custom footer status line (route glyph, source, classifier stats) was removed in favor of pi's native footer. The `emoji` route field is no longer part of the schema; legacy configs carrying it still load (the field is silently ignored).
+> **Note:** The extension's former verbose footer status line (backend model, classifier stats) was removed in favor of pi's native footer; the compact tier line above is all that remains. The `emoji` route field is no longer part of the schema; legacy configs carrying it still load (the field is silently ignored).
 
 ## Troubleshooting
 

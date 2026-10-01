@@ -73,12 +73,19 @@ const TIER_GLYPHS: Record<RouteTier, string> = {
 
 /** Glyph for a route: built-in tier glyphs by route name (incl. standard aliases), else by resolved tier. */
 const ROUTE_NAME_TIERS: Record<string, RouteTier> = {
-  ...({ cheap: "cheap", "cheap-code": "cheap", fast: "fast", balanced: "balanced", powerful: "powerful" } as const),
+  cheap: "cheap",
+  "cheap-code": "cheap",
+  fast: "fast",
+  balanced: "balanced",
+  powerful: "powerful",
 };
 
+function glyphForRoute(route: string, resolvedTier?: RouteTier): string {
+  return TIER_GLYPHS[ROUTE_NAME_TIERS[route] ?? resolvedTier ?? "balanced"];
+}
+
 function glyphFor(decision: RouteDecision): string {
-  const tier = ROUTE_NAME_TIERS[decision.route] ?? decision.heuristicTier ?? decision.classifierVerdict ?? "balanced";
-  return TIER_GLYPHS[tier];
+  return glyphForRoute(decision.route, decision.heuristicTier ?? decision.classifierVerdict);
 }
 
 /**
@@ -220,6 +227,8 @@ function routeRetry(
     const routeConfig = config.routes[name];
     if (!routeConfig || routeConfig.model === failedRef) continue;
     if (!isRouteAvailable(registry, name, routeConfig, features)) continue;
+    // Footer: the tier just changed under the user's feet — reflect it.
+    state?.setStatus?.(STATUS_KEY, `${glyphForRoute(name)} ${name} · retry-fallback`);
     return {
       model: findBackendModel(registry, routeConfig.model),
       thinkingLevel: thinkingLevelFor(routeConfig.reasoning, request.thinkingLevel),

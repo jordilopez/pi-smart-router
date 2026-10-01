@@ -302,3 +302,40 @@ describe("routeRequest — reason: retry", () => {
     expect(route.model).toBeDefined();
   });
 });
+
+describe("routeRequest — retry footer updates", () => {
+  it("publishes the fallback tier when a retry switches backends", async () => {
+    const statuses: (string | undefined)[] = [];
+    initializeRouterState({
+      config: testConfig({
+        routes: {
+          fast: { model: "opencode-go/deepseek-v4-flash", reasoning: "preserve" },
+          balanced: { model: "opencode-go/gpt-5.6-luna", reasoning: "medium" },
+        },
+        classifier: { thresholds: { cheapMax: 1, simpleMax: 1, mediumMax: 1 } },
+      }),
+      setStatus: (_key, text) => statuses.push(text),
+    });
+    const balancedModel = makeModel({ provider: "opencode-go", id: "gpt-5.6-luna" });
+    const registry = new FakeRegistry({
+      models: [balancedModel, makeModel({ provider: "opencode-go", id: "deepseek-v4-flash" })],
+    });
+    const route = await routeRequest(
+      makeRequest({
+        reason: "retry",
+        failed: {
+          model: balancedModel,
+          thinkingLevel: "medium",
+          message: {
+            role: "assistant", content: [], api: "anthropic-messages", provider: "opencode-go", model: "gpt-5.6-luna",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: "error", errorMessage: "maximum context length exceeded", timestamp: Date.now(),
+          },
+        },
+      }),
+      makeCtx(registry),
+    );
+    expect(route.model.id).toBe("deepseek-v4-flash");
+    expect(statuses[statuses.length - 1]).toBe("⚡ fast · retry-fallback");
+  });
+});
