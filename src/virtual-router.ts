@@ -228,6 +228,11 @@ function routeRetry(
   );
 }
 
+/** Build a plain Context for the resolver/classifier from a route request. */
+function contextFrom(request: ModelRouteRequest): Context {
+  return { systemPrompt: "", messages: request.messages } as Context;
+}
+
 /**
  * The virtual model's route callback. See docs/virtual-models.md for the
  * request contract.
@@ -250,10 +255,10 @@ export async function routeRequest(request: ModelRouteRequest, ctx: RouteContext
 
   // Retries: switch backends on overflow/overload, stick on transient errors.
   if (request.reason === "retry" && request.failed) {
-    return routeRetry(ctx.modelRegistry, config, request, { systemPrompt: "", messages: request.messages } as Context);
+    return routeRetry(ctx.modelRegistry, config, request, contextFrom(request));
   }
 
   // Direct requests (compaction summaries, extension calls) take a fresh
   // resolution; pi ignores state returned for direct requests.
-  return resolveFresh(ctx.modelRegistry, config, request, { systemPrompt: "", messages: request.messages } as Context);
+  return resolveFresh(ctx.modelRegistry, config, request, contextFrom(request));
 }
