@@ -41,7 +41,6 @@ export interface RouterVirtualState {
 
 /** Footer status setter (optional; absent in non-interactive contexts/tests). */
 export type SetStatusCallback = (key: string, text: string | undefined) => void;
-
 interface RouterState {
   config: SmartRouterConfig;
   setStatus?: SetStatusCallback;
@@ -54,8 +53,9 @@ export function initializeRouterState(options: { config: SmartRouterConfig; setS
   state = { config: options.config, setStatus: options.setStatus };
 }
 
-/** Clear state — wired to "session_shutdown". */
+/** Clear state — wired to "session_shutdown". Clears the footer status too. */
 export function shutdownRouterState(): void {
+  state?.setStatus?.(STATUS_KEY, undefined);
   state = null;
 }
 
@@ -68,6 +68,9 @@ export function getRouterState(): Readonly<RouterState> | null {
 export function setRouterStateForTesting(next: RouterState | null): void {
   state = next;
 }
+
+/** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
+export const STATUS_KEY = "pi-smart-router";
 
 /** Thinking level for a routed route config: explicit override, else passthrough. */
 function thinkingLevelFor(routeReasoning: SmartRouterConfig["routes"][string]["reasoning"], selected: ModelThinkingLevel): ModelThinkingLevel {
@@ -110,7 +113,7 @@ async function resolveFresh(
   const classifierStats: ClassifierStats = {};
   let classifierVerdict: RouteTier | undefined;
   if (classifierActive && decision.reason !== "rule") {
-    state?.setStatus?.("pi-smart-router", "router: classifying…");
+    state?.setStatus?.(STATUS_KEY, "router: classifying…");
     const verdict = await runClassifier(registry, config, features, context, undefined, classifierStats);
     if (verdict) {
       classifierVerdict = verdict;
@@ -122,6 +125,10 @@ async function resolveFresh(
   if (classifierVerdict && (classifierStats.elapsedMs !== undefined || classifierStats.inputTokens !== undefined)) {
     decision.classifierStats = classifierStats;
   }
+
+  // Footer diagnostics: replace the "classifying…" placeholder with the
+  // decision (source + classifier stats). Routed-model display is native.
+  state?.setStatus?.(STATUS_KEY, formatDecisionStatus(decision));
 
   return {
     model: findBackendModel(registry, decision.backendModel),
@@ -135,9 +142,6 @@ async function resolveFresh(
     },
   };
 }
-
-/** Footer status key used with ctx.ui.setStatus (cleared with value undefined). */
-export const STATUS_KEY = "pi-smart-router";
 
 /**
  * Format the footer status line for a routing decision.
