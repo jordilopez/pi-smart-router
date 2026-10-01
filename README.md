@@ -192,10 +192,12 @@ For each new user turn (tool-call continuations and retries reuse the turn's bac
 Keyword thresholds are fast and free but blind to meaning — and English-only —
 so semantically equal prompts can land on opposite sides of a tier boundary.
 **Configure a classifier** (`classifier.model`) and it classifies **every** new
-turn; its verdict is final (any tier, including `powerful`). Without it the
+turn; its verdict is final (any tier, including `powerful`) and configured
+rules do **not** apply — rules drive routing only in heuristic mode (no
+classifier configured or available) or when the classifier fails to return a
+verdict. Without it the
 router falls back to the heuristic score: deterministic, no API key needed,
-but keyword-based and English-oriented. Either way, explicit rules always win
-first.
+but keyword-based and English-oriented.
 
 Two backends:
 

@@ -415,19 +415,18 @@ describe("resolveRoute: classifier-primary mode (heuristic tier skipped)", () =>
     expect(decision.explanation).not.toContain("heuristic");
   });
 
-  it("rules still win over the classifier path", () => {
+  it("rules win by default; skipRules lets the classifier verdict decide", () => {
     const withRule = config({
       rules: [{ id: "hard", priority: 100, match: { anyKeywords: ["root cause"] }, route: "powerful" }],
     });
-    const decision = resolveRoute(
-      registry(),
-      withRule,
-      features({ complexityScore: 0.05 }),
-      makeContext({ messages: [{ role: "user", content: "find the root cause", timestamp: 1 }] }),
-      undefined,
-      false,
-    );
-    expect(decision.route).toBe("powerful");
-    expect(decision.reason).toBe("rule");
+    const ctx = makeContext({ messages: [{ role: "user", content: "find the root cause", timestamp: 1 }] });
+    // Resolver default: rules first (heuristic mode).
+    const rulesFirst = resolveRoute(registry(), withRule, features({ complexityScore: 0.05 }), ctx, undefined, false);
+    expect(rulesFirst.route).toBe("powerful");
+    expect(rulesFirst.reason).toBe("rule");
+    // Classifier-first mode (skipRules): the verdict decides, rules never apply.
+    const verdictFirst = resolveRoute(registry(), withRule, features({ complexityScore: 0.05 }), ctx, "cheap", false, true);
+    expect(verdictFirst.route).toBe("cheap-code");
+    expect(verdictFirst.reason).toBe("threshold");
   });
 });

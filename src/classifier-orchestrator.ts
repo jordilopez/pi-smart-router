@@ -2,9 +2,10 @@
  * Classifier orchestration for the Smart Router.
  *
  * When `classifier.model` is configured, that backend classifies every new turn
- * into a routing tier (cheap/fast/balanced/powerful). Explicit rules always win
- * first. When no model is configured, the router falls back to the heuristic
- * score and this module is never called.
+ * into a routing tier (cheap/fast/balanced/powerful). Its verdict is final —
+ * rules do not apply when it succeeds (classifier-first, enforced by the route
+ * handler via `skipRules`). When no model is configured, the router falls back
+ * to the heuristic score and this module is never called.
  *
  * Failure philosophy: classification is best-effort. A configured classifier
  * whose backend is unavailable up front (a `typesafe-ai/*` ref with no

@@ -8,8 +8,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initializeRouterState, routeRequest, shutdownRouterState } from "../src/virtual-router.js";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { BUILTIN_DEFAULTS, type SmartRouterConfig } from "../src/types.js";
-import { FakeRegistry, makeContext, makeModel } from "./helpers.js";
+import { FakeRegistry, makeContext, makeFakeProvider, makeModel } from "./helpers.js";
 
 function testConfig(overrides: Partial<SmartRouterConfig> = {}): SmartRouterConfig {
   return {
@@ -337,5 +338,63 @@ describe("routeRequest — retry footer updates", () => {
     );
     expect(route.model.id).toBe("deepseek-v4-flash");
     expect(statuses[statuses.length - 1]).toBe("⚡ fast · retry-fallback");
+  });
+});
+
+// ============================================================================
+// Classifier-first semantics: rules yield to the Jev verdict
+// ============================================================================
+
+describe("routeRequest — classifier-first rule interaction", () => {
+  const ROUTE_MODELS = [
+    makeModel({ provider: "opencode-go", id: "mimo-v2.5" }),
+    makeModel({ provider: "opencode-go", id: "deepseek-v4-flash" }),
+    makeModel({ provider: "opencode-go", id: "gpt-5.6-luna" }),
+    makeModel({ provider: "opencode-go", id: "kimi-k3" }),
+    makeModel({ provider: "openai", id: "gpt-4o-mini" }),
+  ];
+
+  function classifierRegistry(answer: string): FakeRegistry {
+    const provider = makeFakeProvider({
+      streamFactory: () => {
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "text_delta", contentIndex: 0, delta: answer, partial: { role: "assistant", content: [], api: "x", provider: "p", model: "m", usage: {} as never, stopReason: "pending", timestamp: 0 } });
+        stream.end();
+        return stream;
+      },
+    });
+    return new FakeRegistry({ models: ROUTE_MODELS, stableProvider: provider });
+  }
+
+  function classifierConfig(): SmartRouterConfig {
+    return testConfig({
+      classifier: { model: "openai/gpt-4o-mini", timeoutMs: 1000 },
+      rules: [{ id: "typos", priority: 100, match: { anyKeywords: ["typo"] }, route: "cheap-code" }],
+    });
+  }
+
+  afterEach(() => shutdownRouterState());
+
+  it("a Jev verdict overrides a matching rule", async () => {
+    initializeRouterState({ config: classifierConfig() });
+    const route = await routeRequest(
+      makeRequest({
+        messages: makeContext({ messages: [{ role: "user", timestamp: Date.now(), content: "fix this typo please" }] }).messages,
+      }),
+      makeCtx(classifierRegistry("powerful")),
+    );
+    // Rule would say cheap-code/mimo; the verdict says powerful.
+    expect(route.model.id).toBe("kimi-k3");
+  });
+
+  it("rules apply when the classifier fails to produce a verdict", async () => {
+    initializeRouterState({ config: classifierConfig() });
+    const route = await routeRequest(
+      makeRequest({
+        messages: makeContext({ messages: [{ role: "user", timestamp: Date.now(), content: "fix this typo please" }] }).messages,
+      }),
+      makeCtx(classifierRegistry("I cannot answer that")),
+    );
+    expect(route.model.id).toBe("mimo-v2.5");
   });
 });

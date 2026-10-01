@@ -2,9 +2,10 @@
  * Virtual-model route handler.
  *
  * Implements the `route()` callback for the "pi-smart-router/auto" virtual
- * model. The selection pipeline is identical to the pre-virtual-model
- * streamSimple handler: explicit rules → Jev classifier (when configured and
- * available; rules are never second-guessed) → heuristic thresholds →
+ * model. Selection pipeline, classifier-first: when a classifier is configured
+ * and available, its verdict decides and rules never apply; rules drive routing
+ * only in heuristic mode (no classifier) or when the classifier fails.
+ * Without a classifier: explicit rules → heuristic thresholds →
  * defaultRoute → fallbacks → any available route.
  *
  * Dispatch is native: `route()` returns the physical model + thinking level
@@ -139,25 +140,30 @@ async function resolveFresh(
   context: Context,
 ): Promise<{ model: Model<never>; thinkingLevel: ModelThinkingLevel; state: RouterVirtualState }> {
   const features: PromptFeatures = classifyPrompt(context, config.classifier ?? {});
-
-  // When a usable classifier is configured it decides the tier; the heuristic
-  // score never selects it. A transient classifier failure falls through to
-  // defaultRoute/fallbacks. Rules still win first.
   const classifierActive = isClassifierAvailable(config, registry);
-  const useHeuristicTier = !classifierActive;
-  let decision = resolveRoute(registry, config, features, context, undefined, useHeuristicTier);
 
+  let decision: RouteDecision;
   const classifierStats: ClassifierStats = {};
   let classifierVerdict: RouteTier | undefined;
-  if (classifierActive && decision.reason !== "rule") {
+
+  if (classifierActive) {
+    // Classifier-first: Jev runs on every new turn and its verdict decides;
+    // rules never override it. On transient failure (no verdict) the standard
+    // chain applies — rules, defaultRoute, fallbacks — never a heuristic tier.
     state?.setStatus?.(STATUS_KEY, "… classifying");
     const verdict = await runClassifier(registry, config, features, context, undefined, classifierStats);
     if (verdict) {
       classifierVerdict = verdict;
-      decision = resolveRoute(registry, config, features, context, verdict);
+      decision = resolveRoute(registry, config, features, context, verdict, false, true);
+    } else {
+      decision = resolveRoute(registry, config, features, context, undefined, false);
     }
+  } else {
+    // Heuristic mode: rules first, then the score thresholds.
+    decision = resolveRoute(registry, config, features, context, undefined, true);
   }
-  if (useHeuristicTier) decision.heuristicTier = tierForScore(features.complexityScore, classifierThresholds(config));
+
+  if (!classifierActive) decision.heuristicTier = tierForScore(features.complexityScore, classifierThresholds(config));
   decision.classifierVerdict = classifierVerdict;
   if (classifierVerdict && (classifierStats.elapsedMs !== undefined || classifierStats.inputTokens !== undefined)) {
     decision.classifierStats = classifierStats;
