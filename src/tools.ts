@@ -137,6 +137,39 @@ function hasCost(m: CatalogModel): boolean {
 }
 
 /**
+ * Deduplicate models across providers: when multiple providers offer the same
+ * model ID, keep only the cheapest entry (by blended input+output cost).
+ * Models without pricing retain their entry as-is (first encountered wins).
+ */
+function deduplicateModels(models: CatalogModel[]): CatalogModel[] {
+  const byModelId = new Map<string, CatalogModel>();
+  for (const m of models) {
+    const key = m.model.toLowerCase();
+    const existing = byModelId.get(key);
+    if (!existing) {
+      byModelId.set(key, m);
+    } else {
+      const existingCost = hasCost(existing) ? (existing.costIn! + existing.costOut!) : Infinity;
+      const currentCost = hasCost(m) ? (m.costIn! + m.costOut!) : Infinity;
+      if (currentCost < existingCost) {
+        byModelId.set(key, m);
+      }
+    }
+  }
+  return [...byModelId.values()];
+}
+
+/**
+ * True when the tier should rank candidates by cost instead of by raw capability.
+ * All four tiers rank by cost: cheap/fast/balanced are cost-sensitive by design;
+ * powerful prefers cost too since filtering already ensures only capable models
+ * enter the pool (500k+ context, thinking required).
+ */
+function isCostRanked(tier: RouteTier): boolean {
+  return true;
+}
+
+/**
  * Build a short description for a model to use in the classifier state.
  * Includes per-million-token pricing when available, since cost is a real
  * tier signal (cheap/fast tiers are price-driven) and the listing command
@@ -204,16 +237,16 @@ function byCapability(a: CatalogModel, b: CatalogModel): number {
 
 /**
  * Narrow the full candidate list to at most 8 models plausibly suited to a tier:
- * name-hint matches first, then filled from the rest. For the low tiers the fill
- * is cheapest-first (blended $/M tokens, falling back to smallest output only
- * when a model has no price); for the high tiers it is strongest-capability-first.
- * `powerful` always keeps the most capable candidates this way.
+ * name-hint matches first, then filled from the rest. Cost-sensitive tiers
+ * (cheap/fast/balanced) fill cheapest-first (blended $/M tokens, falling back
+ * to smallest output only when a model has no price); powerful fills
+ * strongest-capability-first.
  */
 export function narrowPool(tier: RouteTier, models: CatalogModel[]): CatalogModel[] {
   const hints = TIER_NAME_HINTS[tier];
   const matched = models.filter((m) => hints.some((h) => h.test(m.model)));
   const rest = models.filter((m) => !matched.includes(m));
-  const fill = tier === "cheap" || tier === "fast"
+  const fill = isCostRanked(tier)
     ? [...rest].sort((a, b) => {
         const pa = hasCost(a) ? (a.costIn! + a.costOut!) : Infinity;
         const pb = hasCost(b) ? (b.costIn! + b.costOut!) : Infinity;
@@ -231,23 +264,22 @@ export function narrowPool(tier: RouteTier, models: CatalogModel[]): CatalogMode
 const TIER_INSTRUCTIONS: Record<RouteTier, string> = {
   cheap: 'Which model best fits the "cheap" tier? ${RUBRIC}. This tier is cost-sensitive: prefer the cheapest model that can handle trivial tasks. Context window: 128k-256k is sufficient — do not prioritize large context. Thinking capability: not needed for this tier. Image support: not needed. Do not pick a flagship, reasoning-heavy, or otherwise over-powered model.',
   fast: 'Which model best fits the "fast" tier? ${RUBRIC}. This is the routine coding workhorse: prefer a low latency, fast, capable, cost-effective model for clear implementations and bounded fixes. Context window: 100k-300k is ideal — large enough for typical codebases but not excessive. Thinking capability: not critical for routine work. Image support: not critical. Do not promote a task merely because it spans multiple files or uses tools. Do not pick a heavy reasoning or flagship model for routine work; reserve those for genuinely difficult tasks.',
-  balanced: 'Which model best fits the "balanced" tier? ${RUBRIC}. This is not the default everyday workhorse; reserve it for meaningful judgment, ambiguity, or non-obvious analysis. Context window: larger context (200k-500k) is important for handling complex codebases and longer conversations. Image support: valuable for tasks involving screenshots, diagrams, or visual debugging — prefer models with image capability. Thinking capability: helpful but not required. Prefer general-purpose capability.',
-  powerful: 'Which model best fits the "powerful" tier? ${RUBRIC}. This is the strongest tier: prefer the model with the best reasoning capability; cost is secondary. Context window: large context (500k+) is essential for architecture-level work and cross-cutting analysis. Thinking capability: required — this tier handles genuinely difficult reasoning, formal analysis, and complex debugging. Image support: optional but welcome. Do not pick a lightweight or fast-only model.',
+  balanced: 'Which model best fits the "balanced" tier? ${RUBRIC}. This is not the default everyday workhorse; reserve it for meaningful judgment, ambiguity, or non-obvious analysis. Context window: larger context (200k-500k) is important for handling complex codebases and longer conversations. Image support: valuable for tasks involving screenshots, diagrams, or visual debugging — prefer models with image capability. Thinking capability: helpful but not required. Prefer general-purpose capability. Cost-conscious: among equally capable models, prefer the lower-cost option.',
+  powerful: 'Which model best fits the "powerful" tier? ${RUBRIC}. This is the strongest tier: prefer the model with the best reasoning capability. Context window: large context (500k+) is essential for architecture-level work and cross-cutting analysis. Thinking capability: required — this tier handles genuinely difficult reasoning, formal analysis, and complex debugging. Image support: optional but welcome. Since all candidates already pass these capability gates, cost is a real signal: prefer the lower-cost option among capable models. Do not pick a lightweight or fast-only model.',
 };
 
 /**
  * Ordinal rank label for a model within a tier's candidate pool.
- * Cheap/fast tiers rank by blended cost (cheapest = rank 0).
- * Balanced/powerful tiers rank by capability (strongest = rank 0).
+ * All tiers rank by blended cost (cheapest = rank 0).
  */
 function rankLabel(rank: number, tier: RouteTier): string {
   if (rank === 0) {
-    return tier === "cheap" || tier === "fast"
+    return isCostRanked(tier)
       ? "(cheapest in pool)"
       : "(most capable in pool)";
   }
   const suffix = ["2nd", "3rd", "4th", "5th", "6th", "7th", "8th"][rank - 1] ?? `${rank + 1}th`;
-  return tier === "cheap" || tier === "fast"
+  return isCostRanked(tier)
     ? `(${suffix} cheapest in pool)`
     : `(${suffix} most capable in pool)`;
 }
@@ -298,14 +330,14 @@ export function prepareClassifierRequest(
     const explicitPool = perTierPools?.[tier];
     if (narrow || explicitPool) {
       const pool = (explicitPool ?? narrowPool(tier, models)).slice(0, 8);
-      // Rank the pool: cheap/fast by cost asc, balanced/powerful by capability desc.
-      const ranked = tier === "cheap" || tier === "fast"
+      // All tiers rank by cost asc (cheapest first; rank 0 = cheapest).
+      const ranked = isCostRanked(tier)
         ? [...pool].sort((a, b) => {
             const pa = hasCost(a) ? (a.costIn! + a.costOut!) : Infinity;
             const pb = hasCost(b) ? (b.costIn! + b.costOut!) : Infinity;
             return pa === pb ? a.maxOut - b.maxOut : pa - pb;
           })
-        : [...pool].sort(byCapability); // strongest first; rank 0 = most capable
+        : [...pool].sort(byCapability);
       criteria = {};
       for (const [i, m] of ranked.entries()) {
         const key = slugify(`${m.provider}/${m.model}`);
@@ -323,7 +355,7 @@ export function prepareClassifierRequest(
     }
 
     const rubric = TIER_RUBRIC[tier];
-    const costClause = hasPricing && (tier === "cheap" || tier === "fast")
+    const costClause = hasPricing && isCostRanked(tier)
       ? " Among the candidates that can still do the job, prefer the lowest per-token price."
       : "";
     questions[tier] = {
@@ -669,6 +701,11 @@ export function registerTools(pi: ExtensionAPI): void {
         const excludeSet = new Set(excludeModels.map((id) => id.toLowerCase()));
         models = models.filter((m) => !excludeSet.has(m.model.toLowerCase()));
       }
+
+      // Deduplicate cross-provider: when multiple providers offer the same
+      // model ID (e.g. hyper/deepseek-v4-pro and opencode-go/deepseek-v4-pro),
+      // keep the cheapest entry so Jev doesn't pick a marked-up version.
+      models = deduplicateModels(models);
 
       const warnings: string[] = [];
       if (models.length === 0) {
