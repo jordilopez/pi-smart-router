@@ -169,13 +169,14 @@ describe("narrowPool", () => {
     expect([...maxOuts].sort((a, b) => a - b)).toEqual(maxOuts); // non-decreasing
   });
 
-  it("falls back to capability fill when no names match the hints", () => {
+  it("fills by cost (maxOut tiebreak) when no names match the hints", () => {
     const noHints: CatalogModel[] = [
       { provider: "p", model: "alpha", context: 100_000, maxOut: 8_000, thinking: false, images: false },
       { provider: "p", model: "beta", context: 1_000_000, maxOut: 64_000, thinking: true, images: true },
     ];
     const powerful = narrowPool("powerful", noHints);
-    expect(powerful[0].model).toBe("beta"); // strongest first
+    // All tiers fill cheapest-first; with no pricing, the tiebreak is smallest maxOut.
+    expect(powerful[0].model).toBe("alpha");
   });
 });
 
@@ -219,8 +220,9 @@ describe("pricing (cost-aware cheap/fast)", () => {
     expect(questions.cheap.instructions).toContain("cost-sensitive");
     // Fast is latency-driven; the per-token price clause is still added when pricing exists.
     expect(questions.fast.instructions).toContain("per-token price");
-    expect(questions.balanced.instructions).not.toContain("per-token price");
-    expect(questions.powerful.instructions).not.toContain("per-token price");
+    // Balanced/powerful are cost-ranked too, so the clause applies there as well.
+    expect(questions.balanced.instructions).toContain("per-token price");
+    expect(questions.powerful.instructions).toContain("per-token price");
     // state carries the price
     expect(questions.cheap.criteria["hyper_a_flash"]).toContain("$0.1");
   });
@@ -286,11 +288,11 @@ describe("tier-specific instructions (Task 7)", () => {
     expect(questions.balanced.instructions).toContain("general-purpose");
   });
 
-  it("powerful instruction prioritises reasoning over cost", () => {
+  it("powerful instruction prioritises reasoning but is cost-aware", () => {
     const { questions } = prepareClassifierRequest(models);
     expect(questions.powerful.instructions).toContain("strongest");
     expect(questions.powerful.instructions).toContain("reasoning capability");
-    expect(questions.powerful.instructions).toContain("cost is secondary");
+    expect(questions.powerful.instructions).toContain("cost is a real signal");
   });
 
   it("all four tiers have distinct instructions", () => {
@@ -331,12 +333,12 @@ describe("capability/cost ranking in narrowed descriptions (Task 8)", () => {
     expect(bProDesc).toMatch(/\(3rd cheapest in pool\)$/);
   });
 
-  it("powerful tier ranks most capable model first", () => {
+  it("powerful tier ranks cheapest capable model first (cost-ranked)", () => {
     const { questions } = prepareClassifierRequest(pool, true);
     const powerfulCriteria = questions.powerful.criteria;
-    // b-pro has the largest context and maxOut, should be rank 0.
+    // All tiers rank by blended cost; b-pro ($2/$6) is the most expensive of four.
     const bProDesc = powerfulCriteria["hyper_b_pro"];
-    expect(bProDesc).toMatch(/\(most capable in pool\)$/);
+    expect(bProDesc).toMatch(/\(3rd cheapest in pool\)$/);
   });
 
   it("narrow: false descriptions have no rank labels", () => {
