@@ -22,7 +22,7 @@ Source of truth is `TIER_RUBRIC` in `src/types.ts`. Capability filters are appli
 | Tier | Route | Intent | Default filters |
 |---|---|---|---|
 | cheap | `cheap-code` | low-risk mechanical work | ≥128k context |
-| fast | `fast` | routine coding, clear implementation | ≥100k context |
+| fast | `fast` | routine coding, clear implementation | ≥100k context, measured AA latency |
 | balanced | `balanced` | context-aware judgment, review, tradeoffs | ≥200k context, images |
 | powerful | `powerful` | architecture, security, root-cause, cross-cutting | ≥500k context, thinking |
 

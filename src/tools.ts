@@ -18,7 +18,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { TIER_RUBRIC, type RouteTier } from "./types.js";
 import { validateConfig } from "./config.js";
-import { jevTierClassification, resolveCollisions, applyTierFilters, type TierFilters, TIERS } from "./tier-classification.js";
+import { jevTierClassification, resolveCollisions, applyTierFilters, type JevTierAssignment, type TierFilters, TIERS } from "./tier-classification.js";
+import { getAaBenchmarks, buildAaMetricsMap, normalizeModelId, type AaModelMetrics } from "./aa-client.js";
+import { augmentModelDescription, getTierWeighting, computeTaskCost } from "./aa-enrichment.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -175,12 +177,30 @@ function isCostRanked(tier: RouteTier): boolean {
  * tier signal (cheap/fast tiers are price-driven) and the listing command
  * does not expose it.
  */
-export function modelDescription(m: CatalogModel, positioning?: string): string {
+export function modelDescription(
+  m: CatalogModel,
+  opts?: { positioning?: string; metrics?: AaModelMetrics | null },
+): string {
   const contextLabel = formatTokenCount(m.context);
   const maxOutLabel = formatTokenCount(m.maxOut);
-  const prefix = positioning ? `${m.provider}/${m.model} — ${positioning} | ` : `${m.provider}/${m.model} | `;
+  const prefix = opts?.positioning ? `${m.provider}/${m.model} — ${opts.positioning} | ` : `${m.provider}/${m.model} | `;
   const cost = hasCost(m) ? `, $${formatMoney(m.costIn!)}/$${formatMoney(m.costOut!)} per M tokens` : "";
-  return `${prefix}context ${contextLabel}, maxOut ${maxOutLabel}, thinking ${m.thinking ? "yes" : "no"}, images ${m.images ? "yes" : "no"}${cost}`;
+  
+  let desc = `${prefix}context ${contextLabel}, maxOut ${maxOutLabel}, thinking ${m.thinking ? "yes" : "no"}, images ${m.images ? "yes" : "no"}${cost}`;
+  
+  if (opts?.metrics) {
+    desc = augmentModelDescription(opts.metrics, desc);
+  }
+  // Solve-adjusted task-cost index: folds price + AA capability into one signal.
+  // Only emitted when both registry pricing and AA metrics are present.
+  if (opts?.metrics && hasCost(m)) {
+    const tc = computeTaskCost(m.costIn! + m.costOut!, opts.metrics);
+    if (tc !== null) {
+      desc += ` task-cost ${tc.toFixed(2)} (solve-adjusted)`;
+    }
+  }
+  
+  return desc;
 }
 
 /**
@@ -284,6 +304,15 @@ function rankLabel(rank: number, tier: RouteTier): string {
     : `(${suffix} most capable in pool)`;
 }
 
+export interface PrepareClassifierOptions {
+  /** Cut each tier's pool to ≤ 8 plausible fits with positioning clauses. */
+  narrow?: boolean;
+  /** Explicit per-tier candidate pools; unset tiers use the narrow/full logic. */
+  perTierPools?: Partial<Record<RouteTier, CatalogModel[]>>;
+  /** AA benchmark metrics keyed by `normalizeModelId`; omit for registry-only. */
+  aaMetrics?: Map<string, AaModelMetrics>;
+}
+
 /**
  * Prepare the typesafe_evaluate request for tier classification.
  *
@@ -305,15 +334,18 @@ function rankLabel(rank: number, tier: RouteTier): string {
  */
 export function prepareClassifierRequest(
   models: CatalogModel[],
-  narrow = false,
-  perTierPools?: Partial<Record<RouteTier, CatalogModel[]>>,
+  opts: PrepareClassifierOptions = {},
 ) {
+  const { narrow = false, perTierPools, aaMetrics } = opts;
   // Base descriptions: positioning clause when narrow, plain when not.
   const baseDescriptions = new Map<string, string>();
   for (const m of models) {
     baseDescriptions.set(
       slugify(`${m.provider}/${m.model}`),
-      narrow ? modelDescription(m, positioningClause(m)) : modelDescription(m),
+      modelDescription(m, {
+        positioning: narrow ? positioningClause(m) : undefined,
+        metrics: aaMetrics?.get(normalizeModelId(m.model)) ?? null,
+      }),
     );
   }
   const hasPricing = models.some(hasCost);
@@ -355,8 +387,9 @@ export function prepareClassifierRequest(
     }
 
     const rubric = TIER_RUBRIC[tier];
-    const costClause = hasPricing && isCostRanked(tier)
-      ? " Among the candidates that can still do the job, prefer the lowest per-token price."
+    const weighting = getTierWeighting(tier);
+    const costClause = hasPricing
+      ? ` Among the candidates that can still do the job, prefer the lowest per-token price. (weighting: intelligence=${weighting.intelligenceWeight}, speed=${weighting.speedWeight})`
       : "";
     questions[tier] = {
       type: "choice",
@@ -374,6 +407,76 @@ export function prepareClassifierRequest(
  * exists in the model registry. Returns a list of human-readable errors
  * (empty when all routes are valid).
  */
+/** "provider/model" slug for an assignment's pick, or null when unassigned. */
+function assignmentSlug(assignment: JevTierAssignment): string | null {
+  return assignment.model ? slugify(`${assignment.model.provider}/${assignment.model.model}`) : null;
+}
+
+/** Same for a bare candidate — used when building lookup sets. */
+function modelSlug(model: CatalogModel): string {
+  return slugify(`${model.provider}/${model.model}`);
+}
+
+/**
+ * Re-home a collision-displaced balanced pick from the fast/powerful runner-up
+ * pool. Candidates must also pass balanced's own filters and must not be held by
+ * cheap, fast, or powerful. No AA data or no eligible runner-ups leaves the
+ * existing collision result unchanged.
+ */
+export function rehomeBalancedFromRunnerUpPool(
+  initialBalanced: JevTierAssignment,
+  resolved: Record<RouteTier, JevTierAssignment>,
+  tierPools: Partial<Record<RouteTier, CatalogModel[]>>,
+  aaMetrics?: Map<string, AaModelMetrics>,
+): JevTierAssignment {
+  const initialSlug = assignmentSlug(initialBalanced);
+  const resolvedBalanced = resolved.balanced;
+  const resolvedSlug = assignmentSlug(resolvedBalanced);
+
+  // Preserve existing behavior unless Jev's balanced pick was actually displaced.
+  if (!initialSlug || initialSlug === resolvedSlug || !aaMetrics?.size) return resolvedBalanced;
+
+  const balancedEligible = new Set(
+    (tierPools.balanced ?? []).map(modelSlug),
+  );
+  // Other tiers' resolved picks — the re-homed model must not be a held model.
+  const claimed = new Set<string>();
+  for (const [tier, assignment] of Object.entries(resolved)) {
+    if (tier !== "balanced" && assignment.model) claimed.add(assignmentSlug(assignment)!);
+  }
+  const runnerUps = new Map<string, CatalogModel>();
+  for (const model of [...(tierPools.fast ?? []), ...(tierPools.powerful ?? [])]) {
+    const slug = modelSlug(model);
+    if (balancedEligible.has(slug) && !claimed.has(slug)) runnerUps.set(slug, model);
+  }
+
+  const taskCost = (model: CatalogModel): number => {
+    const price = hasCost(model) ? model.costIn! + model.costOut! : Infinity;
+    const metrics = aaMetrics.get(normalizeModelId(model.model));
+    return computeTaskCost(price, metrics ?? null) ?? Infinity;
+  };
+  const speed = (model: CatalogModel): number =>
+    aaMetrics.get(normalizeModelId(model.model))?.speedTokensPerSec ?? 0;
+  // Sort entries so the runner-up's slug travels with it; rank 0 is best.
+  const ranked = [...runnerUps.entries()].sort(([, a], [, b]) => {
+    const costA = taskCost(a);
+    const costB = taskCost(b);
+    if (costA !== costB) return costA - costB;
+    return speed(b) - speed(a);
+  });
+  const [bestSlug, best] = ranked[0] ?? [];
+  if (!best) return resolvedBalanced;
+
+  return {
+    ...resolvedBalanced,
+    model: best,
+    // The re-home changes candidate choice, not Jev's confidence estimate.
+    // Jev may never have scored this model (criteria are capped at 8), so inherit
+    // the collision-outcome confidence rather than emitting a misleading 0.
+    confidence: initialBalanced.probabilities[bestSlug!] ?? resolvedBalanced.confidence,
+  };
+}
+
 export function validateRouteModels(
   routes: Record<string, { model?: string }>,
   findModel: (provider: string, modelId: string) => unknown,
@@ -526,7 +629,7 @@ export function registerTools(pi: ExtensionAPI): void {
       };
 
       if (prepareClassifier && filtered.length > 0) {
-        result.classifierRequest = prepareClassifierRequest(filtered, narrow === true);
+        result.classifierRequest = prepareClassifierRequest(filtered, { narrow: narrow === true });
       }
 
       return {
@@ -622,7 +725,7 @@ export function registerTools(pi: ExtensionAPI): void {
     name: "smart-router-setup-tiers",
     label: "Smart Router Setup Tiers",
     description:
-      "Classifies the Pi model catalog into the four smart-router tiers in one call: fetches models, applies per-tier capability filters, asks TypeSafe Jev (one choice question per tier, single request), resolves duplicate picks deterministically, and returns a proposed assignment with ready-to-write routes. Does NOT write the config — pass the returned routes to smart-router-update-routes after user approval. Takes Jev's first response as-is; low confidence is surfaced as a warning, never re-run.",
+      "Classifies the Pi model catalog into the four smart-router tiers in one call: fetches models, applies per-tier capability filters (the fast tier also requires measured AA latency when AA data is available), asks TypeSafe Jev (one choice question per tier, single request), resolves duplicate picks deterministically inside each tier's pool, re-homes a collision-displaced balanced pick from eligible fast/powerful runner-ups, and returns a proposed assignment with ready-to-write routes. Does NOT write the config — pass the returned routes to smart-router-update-routes after user approval. Takes Jev's first response as-is; low confidence is surfaced as a warning, never re-run.",
     promptSnippet: "Classify models into tiers with Jev and propose routes",
     parameters: {
       type: "object",
@@ -649,6 +752,7 @@ export function registerTools(pi: ExtensionAPI): void {
                 minContext: { type: "number", description: "Minimum context window in tokens" },
                 requireThinking: { type: "boolean", description: "Only thinking models eligible" },
                 requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+                requireLatencyData: { type: "boolean", description: "Only models with measured AA latency (fast tier default)" },
               },
             },
             fast: {
@@ -658,6 +762,7 @@ export function registerTools(pi: ExtensionAPI): void {
                 minContext: { type: "number", description: "Minimum context window in tokens" },
                 requireThinking: { type: "boolean", description: "Only thinking models eligible" },
                 requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+                requireLatencyData: { type: "boolean", description: "Only models with measured AA latency (fast tier default)" },
               },
             },
             balanced: {
@@ -667,6 +772,7 @@ export function registerTools(pi: ExtensionAPI): void {
                 minContext: { type: "number", description: "Minimum context window in tokens" },
                 requireThinking: { type: "boolean", description: "Only thinking models eligible" },
                 requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+                requireLatencyData: { type: "boolean", description: "Only models with measured AA latency (fast tier default)" },
               },
             },
             powerful: {
@@ -676,6 +782,7 @@ export function registerTools(pi: ExtensionAPI): void {
                 minContext: { type: "number", description: "Minimum context window in tokens" },
                 requireThinking: { type: "boolean", description: "Only thinking models eligible" },
                 requireImages: { type: "boolean", description: "Only image-capable models eligible" },
+                requireLatencyData: { type: "boolean", description: "Only models with measured AA latency (fast tier default)" },
               },
             },
           },
@@ -712,10 +819,19 @@ export function registerTools(pi: ExtensionAPI): void {
         throw new Error(`No models found for provider(s): ${providers.join(", ")}`);
       }
 
-      // 2. Per-tier capability pools.
+      // 2. Optional AA benchmark enrichment (never throws; registry-only on failure).
+      // Fetched before per-tier filtering so tiers can use measured latency.
+      const benchmarks = await getAaBenchmarks();
+      if (process.env.AA_API_KEY && !benchmarks) {
+        warnings.push("AA benchmark data unavailable; classification used registry data only");
+      }
+      const aaMetrics = buildAaMetricsMap(benchmarks);
+
+      // 3. Per-tier capability pools (the fast tier also drops latency-blind
+      // models when AA data is available; see defaultTierFilters).
       const tierPools = {} as Record<RouteTier, CatalogModel[]>;
       for (const tier of TIERS) {
-        const pool = applyTierFilters(tier, models, tierOverrides?.[tier]);
+        const pool = applyTierFilters(tier, models, tierOverrides?.[tier], aaMetrics);
         tierPools[tier] = pool;
         if (pool.length === 0) {
           warnings.push(
@@ -723,16 +839,24 @@ export function registerTools(pi: ExtensionAPI): void {
           );
         }
       }
-
-      // 3. Single Jev pass + deterministic collision resolution.
+      // 4. Single Jev pass + deterministic collision resolution.
       const jev = await jevTierClassification(models, {
         narrow: narrow !== false,
         tierPools,
+        aaMetrics,
       });
       const allPoolModels = [...new Set(TIERS.flatMap((t) => tierPools[t]))];
-      const resolved = resolveCollisions(jev.assignments, allPoolModels);
+      // Always pass tierPools: a tier's collision fallback must respect its own
+      // filter pool (e.g. the latency-gated fast tier) regardless of AA.
+      const resolved = resolveCollisions(jev.assignments, allPoolModels, tierPools);
+      resolved.balanced = rehomeBalancedFromRunnerUpPool(
+        jev.assignments.balanced,
+        resolved,
+        tierPools,
+        aaMetrics,
+      );
 
-      // 4. Build the proposed table and update-routes payload.
+      // 5. Build the proposed table and update-routes payload.
       const ROUTE_NAMES: Record<RouteTier, string> = {
         cheap: "cheap-code",
         fast: "fast",

@@ -10,6 +10,7 @@
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import { type RouteTier } from "./types.js";
 import { prepareClassifierRequest, slugify, type CatalogModel } from "./tools.js";
+import { normalizeModelId, type AaModelMetrics } from "./aa-client.js";
 
 // ============================================================================
 // Per-tier capability filters
@@ -27,6 +28,17 @@ export interface TierFilters {
   requireThinking: boolean;
   /** When true, models without image support are excluded from this tier. */
   requireImages: boolean;
+  /**
+   * When true, drop models with no measured AA latency (speed and TTFT both 0).
+   * Only enforced when AA data is available, so the tier stays usable offline.
+   * Intended for the fast tier, where measured throughput is the point.
+   */
+  requireLatencyData?: boolean;
+}
+
+/** True when AA reported usable latency for a model. */
+function hasLatencyData(metrics: AaModelMetrics | undefined): boolean {
+  return metrics !== undefined && (metrics.speedTokensPerSec > 0 || metrics.ttftSeconds > 0);
 }
 
 /**
@@ -40,7 +52,7 @@ export function defaultTierFilters(tier: RouteTier): TierFilters {
     case "cheap":
       return { minContext: 128_000, requireThinking: false, requireImages: false };
     case "fast":
-      return { minContext: 100_000, requireThinking: false, requireImages: false };
+      return { minContext: 100_000, requireThinking: false, requireImages: false, requireLatencyData: true };
     case "balanced":
       return { minContext: 200_000, requireThinking: false, requireImages: true };
     case "powerful":
@@ -52,17 +64,28 @@ export function defaultTierFilters(tier: RouteTier): TierFilters {
  * Apply a tier's filters to a candidate list. `overrides` are merged on top of
  * the tier defaults (partial: only the given fields are overridden).
  */
+/**
+ * Apply a tier's filters to a candidate list. `overrides` are merged on top of
+ * the tier defaults (partial: only the given fields are overridden).
+ *
+ * When a tier requires latency data, `aaMetrics` is consulted; if it is absent
+ * or empty (no AA key / fetch failed), that requirement is skipped so the tier
+ * still has candidates.
+ */
 export function applyTierFilters(
   tier: RouteTier,
   models: CatalogModel[],
   overrides?: Partial<TierFilters>,
+  aaMetrics?: Map<string, AaModelMetrics>,
 ): CatalogModel[] {
   const f = { ...defaultTierFilters(tier), ...overrides };
+  const gateLatency = f.requireLatencyData === true && aaMetrics !== undefined && aaMetrics.size > 0;
   return models.filter(
     (m) =>
       m.context >= f.minContext &&
       (!f.requireThinking || m.thinking) &&
-      (!f.requireImages || m.images),
+      (!f.requireImages || m.images) &&
+      (!gateLatency || hasLatencyData(aaMetrics!.get(normalizeModelId(m.model)))),
   );
 }
 
@@ -116,6 +139,11 @@ export interface JevTierOptions {
    * filters). Tiers without an entry use the narrow/full pool logic.
    */
   tierPools?: Partial<Record<RouteTier, CatalogModel[]>>;
+  /**
+   * AA benchmark metrics keyed by `normalizeModelId`. Optional: omit (or pass an
+   * empty map) to classify on registry data alone.
+   */
+  aaMetrics?: Map<string, AaModelMetrics>;
   /** Test/alternate injection point. Defaults to a lazily-created TypeSafeClient. */
   client?: SystemOneCaller;
 }
@@ -166,7 +194,11 @@ export async function jevTierClassification(
         Object.values(options.tierPools).flat().map((m) => [slugify(`${m.provider}/${m.model}`), m] as const),
       ).values()]
     : models;
-  const { state, questions } = prepareClassifierRequest(classifyModels, narrow, options.tierPools);
+  const { state, questions } = prepareClassifierRequest(classifyModels, {
+    narrow,
+    perTierPools: options.tierPools,
+    aaMetrics: options.aaMetrics,
+  });
   if (Object.keys(state).length === 0) {
     throw new Error("No candidate models to classify.");
   }
@@ -219,8 +251,11 @@ const TIER_RANK: Record<RouteTier, number> = { cheap: 0, fast: 1, balanced: 2, p
  *    toward the more capable tier).
  * 2. Losers re-pick: each loser, in descending-confidence order, takes the
  *    highest-probability candidate from its own distribution that is not
- *    claimed by a winner or an earlier loser. A loser with no candidate left
- *    stays unassigned (confidence 0).
+ *    claimed by a winner or an earlier loser. When `tierPools` is provided,
+ *    fallbacks are additionally restricted to the tier's own filter pool, so a
+ *    tier can never be re-homed to a candidate its capability filters exclude
+ *    (e.g. the latency-gated fast tier). A loser with no candidate left stays
+ *    unassigned (confidence 0).
  * 3. Uncontested picks never change.
  *
  * `powerful` is never displaced. `models` is the full candidate list — used to
@@ -230,7 +265,11 @@ const TIER_RANK: Record<RouteTier, number> = { cheap: 0, fast: 1, balanced: 2, p
 export function resolveCollisions(
   assignments: Record<RouteTier, JevTierAssignment>,
   models: CatalogModel[],
+  tierPools?: Partial<Record<RouteTier, CatalogModel[]>>,
 ): Record<RouteTier, JevTierAssignment> {
+  // Optional per-tier pool constraint. When supplied, a tier's collision
+  // fallback must also belong to that tier's filter pool; tiers without an
+  // entry (e.g. tests) keep the historical global fallback.
   const bySlug = new Map<string, CatalogModel>();
   for (const m of models) bySlug.set(slugify(`${m.provider}/${m.model}`), m);
   const slugOf = (a: JevTierAssignment) =>
@@ -272,8 +311,11 @@ export function resolveCollisions(
   losers.sort((x, y) => resolved[y].confidence - resolved[x].confidence || TIER_RANK[y] - TIER_RANK[x]);
   for (const tier of losers) {
     const a = resolved[tier];
+    const allowed = tierPools?.[tier]
+      ? new Set(tierPools[tier]!.map((m) => slugify(`${m.provider}/${m.model}`)))
+      : undefined;
     const [nextSlug, nextProb] = Object.entries(a.probabilities)
-      .filter(([s]) => bySlug.has(s) && !claimed.has(s))
+      .filter(([s]) => bySlug.has(s) && (!allowed || allowed.has(s)) && !claimed.has(s))
       .sort(([, p1], [, p2]) => p2 - p1)[0] ?? [];
     if (nextSlug) {
       claimed.add(nextSlug);
