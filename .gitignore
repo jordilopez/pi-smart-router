@@ -12,3 +12,7 @@ dist/
 
 # Tasks
 tasks/
+
+# Specs
+SPEC*.md
+
