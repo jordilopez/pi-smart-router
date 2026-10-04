@@ -190,13 +190,13 @@ export function modelDescription(
   
   if (opts?.metrics) {
     desc = augmentModelDescription(opts.metrics, desc);
-  }
-  // Solve-adjusted task-cost index: folds price + AA capability into one signal.
-  // Only emitted when both registry pricing and AA metrics are present.
-  if (opts?.metrics && hasCost(m)) {
-    const tc = computeTaskCost(m.costIn! + m.costOut!, opts.metrics);
-    if (tc !== null) {
-      desc += ` task-cost ${tc.toFixed(2)} (solve-adjusted)`;
+    // Solve-adjusted task-cost index: folds price + AA capability into one signal.
+    // Only emitted when both registry pricing and AA metrics are present.
+    if (hasCost(m)) {
+      const tc = computeTaskCost(m.costIn! + m.costOut!, opts.metrics);
+      if (tc !== null) {
+        desc += ` task-cost ${tc.toFixed(2)} (solve-adjusted)`;
+      }
     }
   }
   
