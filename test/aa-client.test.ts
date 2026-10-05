@@ -87,13 +87,16 @@ describe('aa-client', () => {
     process.env.AA_API_KEY = 'test-key';
     (fetch as any).mockResolvedValue({
       ok: true,
-      json: async () => [
-        { modelId: 'good-model', intelligenceIndex: '72.5', speedTokensPerSec: 10 },
-        { modelId: 'no-metrics-model' },
-        { notAModel: true },
-        null,
-        'garbage',
-      ],
+      json: async () => ({
+        data: [
+          { modelId: 'good-model', intelligenceIndex: '72.5', speedTokensPerSec: 10 },
+          { modelId: 'no-metrics-model' },
+          { notAModel: true },
+          null,
+          'garbage',
+        ],
+        pagination: { has_more: false },
+      }),
     });
 
     const result = await getAaBenchmarks({ cacheDir: mockCacheDir });
@@ -111,7 +114,7 @@ describe('aa-client', () => {
     await expect(fs.access(cachePath)).rejects.toThrow();
   });
 
-  it('unwraps the real {data:[...]} payload wrapper', async () => {
+  it('unwraps the real {data:[...]} payload wrapper (nested performance)', async () => {
     process.env.AA_API_KEY = 'test-key';
     (fetch as any).mockResolvedValue({
       ok: true,
@@ -131,6 +134,28 @@ describe('aa-client', () => {
     expect(result!.data).toEqual([
       { modelId: 'somemodel', intelligenceIndex: 42.5, speedTokensPerSec: 90, ttftSeconds: 0.5 },
     ]);
+  });
+
+  it('follows pagination and merges all pages', async () => {
+    process.env.AA_API_KEY = 'test-key';
+    const page = (slug: string, i: number) => ({
+      slug,
+      evaluations: { artificial_analysis_intelligence_index: i },
+      performance: { median_output_tokens_per_second: 100 + i, median_time_to_first_token_seconds: 0.5 },
+    });
+    (fetch as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [page('model-a', 1)], pagination: { page: 1, has_more: true } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [page('model-b', 2)], pagination: { page: 2, has_more: false } }),
+      });
+
+    const result = await getAaBenchmarks({ cacheDir: mockCacheDir });
+    expect((fetch as any).mock.calls[1][0]).toContain('page=2');
+    expect(result!.data.map((m) => m.modelId)).toEqual(['modela', 'modelb']);
   });
 
   it('propagates codingIndex when present', async () => {

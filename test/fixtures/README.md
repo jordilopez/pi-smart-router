@@ -5,8 +5,8 @@
 **Status: synthetic, structure-accurate. Not a captured live response.**
 
 This fixture mirrors the confirmed shape of the live
-`GET https://artificialanalysis.ai/api/v2/data/llms/models` payload
-(wrapper object, `slug`, nested `evaluations`, top-level `median_*` fields) but
+`GET https://artificialanalysis.ai/api/v2/language/models/free` payload
+(wrapper object, `slug`, nested `evaluations`, nested `performance.median_*` fields) but
 uses **invented values and synthetic slugs** (`synthetic-*`). It is committed
 instead of a live capture because Artificial Analysis data is licensed and not
 clearly redistributable in a public repository.
@@ -14,7 +14,7 @@ clearly redistributable in a public repository.
 To restore a real capture locally (do **not** commit it):
 
 ```sh
-curl -s https://artificialanalysis.ai/api/v2/data/llms/models \
+curl -s https://artificialanalysis.ai/api/v2/language/models/free \
   -H "x-api-key: $AA_API_KEY" > /tmp/aa-live.json
 python3 - <<'PY'
 import json

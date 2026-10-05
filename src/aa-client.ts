@@ -35,10 +35,12 @@ export interface GetAaBenchmarksOptions {
   refresh?: boolean;
 }
 
-const AA_MODELS_URL = 'https://artificialanalysis.ai/api/v2/data/llms/models';
+const AA_MODELS_URL = 'https://artificialanalysis.ai/api/v2/language/models/free';
 const AA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const AA_TIMEOUT_MS = 10_000;
 const AA_MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // best-effort guard on an untrusted payload
+/** Hard cap on paginated fetches so a misbehaving payload cannot loop forever. */
+const AA_MAX_PAGES = 20;
 
 /** Cache filename inside the cache directory (exported so tests stay in sync). */
 export const AA_CACHE_FILE = 'aa-benchmarks-cache.json';
@@ -118,17 +120,9 @@ export async function getAaBenchmarks(opts?: GetAaBenchmarksOptions): Promise<Aa
   if (!apiKey) return cached;
 
   try {
-    const res = await fetch(AA_MODELS_URL, {
-      headers: { 'x-api-key': apiKey },
-      signal: AbortSignal.timeout(AA_TIMEOUT_MS),
-    });
-    if (!res.ok) return cached; // 401/500/etc — prefer stale data over nothing
-
-    // Best-effort guard: reject an oversized payload when the server declares it.
-    const declaredBytes = Number(res.headers?.get?.('content-length'));
-    if (Number.isFinite(declaredBytes) && declaredBytes > AA_MAX_RESPONSE_BYTES) return cached;
-
-    const normalized = normalize(await res.json());
+    const rows = await fetchAllPages(apiKey);
+    if (rows === null) return cached; // any page failure — prefer stale data over nothing
+    const normalized = normalize(rows);
     if (normalized.length === 0) return cached; // never cache an empty payload
 
     const fresh: AaBenchmarks = { timestamp: now, data: normalized };
@@ -137,6 +131,41 @@ export async function getAaBenchmarks(opts?: GetAaBenchmarksOptions): Promise<Aa
   } catch {
     return cached; // network error / timeout / bad JSON
   }
+}
+
+/**
+ * Fetches every page of the paginated Free endpoint and returns the combined
+ * `data[]` rows, or null when any page fails. Page size is server-controlled
+ * (~200 rows); a hard page cap guards against runaway pagination from a
+ * misbehaving payload.
+ */
+async function fetchAllPages(apiKey: string): Promise<unknown[] | null> {
+  const rows: unknown[] = [];
+  for (let page = 1; page <= AA_MAX_PAGES; page++) {
+    const url = page === 1 ? AA_MODELS_URL : `${AA_MODELS_URL}?page=${page}`;
+    const res = await fetch(url, {
+      headers: { 'x-api-key': apiKey },
+      signal: AbortSignal.timeout(AA_TIMEOUT_MS),
+    });
+    if (!res.ok) return null; // 401/500/etc — prefer stale data over nothing
+
+    // Best-effort guard: reject an oversized payload when the server declares it.
+    const declaredBytes = Number(res.headers?.get?.('content-length'));
+    if (Number.isFinite(declaredBytes) && declaredBytes > AA_MAX_RESPONSE_BYTES) return null;
+
+    const raw: unknown = await res.json();
+    if (raw === null || typeof raw !== 'object') return null;
+    const body = raw as Record<string, unknown>;
+    if (!Array.isArray(body.data)) return null;
+    rows.push(...body.data);
+
+    const pagination =
+      body.pagination !== null && typeof body.pagination === 'object'
+        ? (body.pagination as Record<string, unknown>)
+        : {};
+    if (pagination.has_more !== true) break; // absent/false/invalid => last page
+  }
+  return rows;
 }
 
 /**
@@ -229,10 +258,10 @@ function extractRows(raw: unknown): unknown[] {
  * rows are dropped, and non-numeric metrics never propagate (which would throw
  * later during description formatting).
  *
- * Real AA v2 shape: rows under `data[]`, `slug` for the model id, intelligence
+ * Real AA Free shape: rows under `data[]`, `slug` for the model id, intelligence
  * under `evaluations.artificial_analysis_intelligence_index`, and throughput /
- * TTFT as top-level `median_*` fields. Older/aliased names are kept so a bare
- * array payload still parses.
+ * TTFT under `performance.median_*`. Older/aliased names (including top-level
+ * `median_*`) are kept so legacy or bare-array payloads still parse.
  */
 function normalize(raw: unknown): AaModelMetrics[] {
   const out: AaModelMetrics[] = [];
@@ -254,12 +283,20 @@ function normalize(raw: unknown): AaModelMetrics[] {
         'intelligenceIndex',
         'intelligence',
       ]) ?? firstNumber(row, ['intelligenceIndex', 'intelligence']);
-    const speed = firstNumber(row, [
+    const performance =
+      row.performance !== null && typeof row.performance === 'object'
+        ? (row.performance as Record<string, unknown>)
+        : {};
+    const speed = firstNumber(performance, [
+      'median_output_tokens_per_second',
+    ]) ?? firstNumber(row, [
       'median_output_tokens_per_second',
       'speedTokensPerSec',
       'tokensPerSecond',
     ]);
-    const ttft = firstNumber(row, [
+    const ttft = firstNumber(performance, [
+      'median_time_to_first_token_seconds',
+    ]) ?? firstNumber(row, [
       'median_time_to_first_token_seconds',
       'ttftSeconds',
       'timeToFirstToken',
