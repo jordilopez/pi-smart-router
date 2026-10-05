@@ -16,10 +16,12 @@ import {
   parseTokenValue,
   positioningClause,
   prepareClassifierRequest,
+  rehomeBalancedFromRunnerUpPool,
   slugify,
   validateRouteModels,
   type CatalogModel,
 } from "../src/tools.js";
+import { buildAaMetricsMap, type AaBenchmarks } from "../src/aa-client.js";
 
 describe("parseTokenValue", () => {
   it("parses K and M suffixes (case-insensitive)", () => {
@@ -133,6 +135,54 @@ describe("prepareClassifierRequest", () => {
         "hyper_kimi_k2_7_code",
       ]);
     }
+  });
+});
+
+describe("prepareClassifierRequest with AA enrichment", () => {
+  const models: CatalogModel[] = [
+    { provider: "hyper", model: "deepseek-v4-pro", context: 1_000_000, maxOut: 384_000, thinking: true, images: false, costIn: 2, costOut: 6 },
+    { provider: "hyper", model: "glm-5.3-flash", context: 1_000_000, maxOut: 131_100, thinking: true, images: true, costIn: 0.15, costOut: 0.5 },
+  ];
+
+  const aa: AaBenchmarks = {
+    timestamp: Date.now(),
+    data: [
+      { modelId: "deepseekv4pro", intelligenceIndex: 36, codingIndex: 68.8, speedTokensPerSec: 116.1, ttftSeconds: 1.0 },
+      { modelId: "glm53flash", intelligenceIndex: 41.8, speedTokensPerSec: 54.1, ttftSeconds: 3.0 },
+    ],
+  };
+
+  it("output is byte-identical to the no-AA case when metrics are absent", () => {
+    const baseline = prepareClassifierRequest(models, { narrow: true });
+    const withEmptyMap = prepareClassifierRequest(models, { narrow: true, aaMetrics: buildAaMetricsMap(null) });
+    expect(withEmptyMap).toEqual(baseline);
+    for (const desc of Object.values(baseline.state)) {
+      expect(desc).not.toContain("intelligence");
+    }
+  });
+
+  it("appends AA columns and task-cost when metrics are provided", () => {
+    const { state } = prepareClassifierRequest(models, { narrow: true, aaMetrics: buildAaMetricsMap(aa) });
+    const pro = state["hyper_deepseek_v4_pro"];
+ expect(pro).toContain("intelligence 36.00");
+    expect(pro).toContain("speed 116.1 tok/s");
+    expect(pro).toContain("TTFT 1.0s");
+    // deepseek-v4-pro: blended=8, coding=68.8 -> p=0.688 -> 8/0.688 = 11.63
+    expect(pro).toContain("task-cost 11.63");
+    const flash = state["hyper_glm_5_3_flash"];
+ expect(flash).toContain("intelligence 41.80");
+    // glm53flash has no codingIndex in mock -> fallback to intel 41.8
+    // blended=0.65, p=0.418 -> 0.65/0.418 = 1.55
+    expect(flash).toContain("task-cost 1.56");
+  });
+
+  it("ignores metrics for models with no AA match", () => {
+    const noMatch: AaBenchmarks = {
+      timestamp: Date.now(),
+      data: [{ modelId: "someothermodel", intelligenceIndex: 1, speedTokensPerSec: 1, ttftSeconds: 1 }],
+    };
+    const { state } = prepareClassifierRequest(models, { narrow: true, aaMetrics: buildAaMetricsMap(noMatch) });
+    expect(state["hyper_deepseek_v4_pro"]).not.toContain("intelligence");
   });
 });
 
@@ -257,7 +307,7 @@ describe("positioningClause (family coverage)", () => {
         provider: "hyper", model: modelName, context: 1_000_000, maxOut: 128_000,
         thinking: true, images: true,
       };
-      const desc = modelDescription(m, positioningClause(m));
+      const desc = modelDescription(m, { positioning: positioningClause(m) });
       // The description includes the family name via the positioning clause.
       expect(desc).toContain(family);
     });
@@ -314,7 +364,7 @@ describe("capability/cost ranking in narrowed descriptions (Task 8)", () => {
   ];
 
   it("adds rank labels to narrowed criteria", () => {
-    const { state } = prepareClassifierRequest(pool, true);
+    const { state } = prepareClassifierRequest(pool, { narrow: true });
     // At least one entry should contain a rank label.
     const hasRank = Object.values(state).some(
       (d) => d.includes("cheapest in pool") || d.includes("most capable in pool"),
@@ -323,7 +373,7 @@ describe("capability/cost ranking in narrowed descriptions (Task 8)", () => {
   });
 
   it("cheap tier ranks cheapest model first", () => {
-    const { questions } = prepareClassifierRequest(pool, true);
+    const { questions } = prepareClassifierRequest(pool, { narrow: true });
     const cheapCriteria = questions.cheap.criteria;
     // The cheapest model (a-flash, cost 0.15+0.47=0.62) should be rank 0.
     const aFlashDesc = cheapCriteria["hyper_a_flash"];
@@ -334,7 +384,7 @@ describe("capability/cost ranking in narrowed descriptions (Task 8)", () => {
   });
 
   it("powerful tier ranks cheapest capable model first (cost-ranked)", () => {
-    const { questions } = prepareClassifierRequest(pool, true);
+    const { questions } = prepareClassifierRequest(pool, { narrow: true });
     const powerfulCriteria = questions.powerful.criteria;
     // All tiers rank by blended cost; b-pro ($2/$6) is the most expensive of four.
     const bProDesc = powerfulCriteria["hyper_b_pro"];
@@ -342,7 +392,7 @@ describe("capability/cost ranking in narrowed descriptions (Task 8)", () => {
   });
 
   it("narrow: false descriptions have no rank labels", () => {
-    const { state } = prepareClassifierRequest(pool, false);
+    const { state } = prepareClassifierRequest(pool, { narrow: false });
     const hasRank = Object.values(state).some(
       (d) => d.includes("cheapest in pool") || d.includes("most capable in pool") || /\d+(st|nd|rd|th)/.test(d),
     );
@@ -404,20 +454,20 @@ describe("prepareClassifierRequest (narrow: true)", () => {
   ];
 
   it("cuts each tier's criteria to at most 8 entries", () => {
-    const { questions } = prepareClassifierRequest(pool, true);
+    const { questions } = prepareClassifierRequest(pool, { narrow: true });
     for (const tier of ["cheap", "fast", "balanced", "powerful"]) {
       expect(Object.keys(questions[tier].criteria).length).toBeLessThanOrEqual(8);
     }
   });
 
   it("enriches descriptions with a positioning clause", () => {
-    const { state } = prepareClassifierRequest(pool, true);
+    const { state } = prepareClassifierRequest(pool, { narrow: true });
     expect(state["hyper_deepseek_v4_pro"]).toContain("flagship/reasoning tier");
     expect(state["hyper_glm_5_3_flash"]).toContain("lightweight, fast tier");
   });
 
   it("keeps state as the union of the narrowed pools and includes powerful's strongest", () => {
-    const { state, questions } = prepareClassifierRequest(pool, true);
+    const { state, questions } = prepareClassifierRequest(pool, { narrow: true });
     const stateIds = Object.keys(state).sort();
     const union = new Set<string>();
     for (const tier of ["cheap", "fast", "balanced", "powerful"]) {
@@ -429,7 +479,7 @@ describe("prepareClassifierRequest (narrow: true)", () => {
 
   it("leaves the default (narrow: false) output unchanged", () => {
     const baseline = prepareClassifierRequest(pool);
-    const explicit = prepareClassifierRequest(pool, false);
+    const explicit = prepareClassifierRequest(pool, { narrow: false });
     expect(explicit).toEqual(baseline);
     // spec-only descriptions, no positioning clause
     expect(baseline.state["hyper_deepseek_v4_pro"]).not.toContain("flagship");
@@ -437,6 +487,97 @@ describe("prepareClassifierRequest (narrow: true)", () => {
     for (const tier of ["cheap", "fast", "balanced", "powerful"]) {
       expect(Object.keys(baseline.questions[tier].criteria).sort()).toEqual(Object.keys(baseline.state).sort());
     }
+  });
+});
+
+describe("rehomeBalancedFromRunnerUpPool", () => {
+  const cheapWinner: CatalogModel = { provider: "p", model: "cheap", context: 256_000, maxOut: 8_000, thinking: false, images: false };
+  const fastWinner: CatalogModel = { provider: "p", model: "fast-winner", context: 1_000_000, maxOut: 64_000, thinking: false, images: true, costIn: 1, costOut: 1 };
+  const powerfulWinner: CatalogModel = { provider: "p", model: "power-winner", context: 1_000_000, maxOut: 64_000, thinking: true, images: true, costIn: 1, costOut: 1 };
+  const valueWinner: CatalogModel = { provider: "p", model: "value-winner", context: 1_000_000, maxOut: 64_000, thinking: true, images: true, costIn: 0.2, costOut: 0.2 };
+  const otherRunner: CatalogModel = { provider: "p", model: "other-runner", context: 1_000_000, maxOut: 64_000, thinking: true, images: true, costIn: 1, costOut: 1 };
+  const notBalancedEligible: CatalogModel = { provider: "p", model: "no-images", context: 1_000_000, maxOut: 64_000, thinking: true, images: false, costIn: 0.01, costOut: 0.01 };
+
+  const asg = (tier: RouteTier, model: CatalogModel | undefined, confidence: number, probabilities: Record<string, number>): JevTierAssignment =>
+    ({ tier, model, confidence, probabilities });
+  const aaMetrics = buildAaMetricsMap({
+    timestamp: 0,
+    data: [
+      { modelId: "valuewinner", intelligenceIndex: 80, codingIndex: 80, speedTokensPerSec: 100, ttftSeconds: 0.5 },
+      { modelId: "otherrunner", intelligenceIndex: 40, codingIndex: 40, speedTokensPerSec: 50, ttftSeconds: 1 },
+      { modelId: "noimages", intelligenceIndex: 90, codingIndex: 90, speedTokensPerSec: 200, ttftSeconds: 0.2 },
+    ],
+  });
+
+  /** Canonical "balanced was displaced by fast" scene; tests override the details. */
+  function displacedScene(
+    initialBalancedProbabilities: Record<string, number>,
+    overrides?: { resolvedBalanced?: JevTierAssignment; initialBalanced?: JevTierAssignment },
+  ) {
+    const initialBalanced =
+      overrides?.initialBalanced ?? asg("balanced", fastWinner, 0.8, initialBalancedProbabilities);
+    const resolved = {
+      cheap: asg("cheap", cheapWinner, 0.9, {}),
+      fast: asg("fast", fastWinner, 0.8, {}),
+      balanced: overrides?.resolvedBalanced ?? asg("balanced", otherRunner, 0.2, initialBalancedProbabilities),
+      powerful: asg("powerful", powerfulWinner, 0.9, {}),
+    };
+    return { initialBalanced, resolved };
+  }
+
+  it("keeps the collision-outcome confidence when Jev never scored the runner-up", () => {
+    // Only the contested pick was scored; the re-home target is absent.
+    const { initialBalanced, resolved } = displacedScene({ [slugify("p/fast-winner")]: 0.8 });
+    const pools = {
+      fast: [fastWinner, valueWinner, otherRunner],
+      balanced: [fastWinner, valueWinner, otherRunner],
+      powerful: [powerfulWinner, valueWinner],
+    };
+
+    const result = rehomeBalancedFromRunnerUpPool(initialBalanced, resolved, pools, aaMetrics);
+    expect(result.model?.model).toBe("value-winner");
+    // Not 0: inherited from the collision fallback, not an unscored zero.
+    expect(result.confidence).toBe(0.2);
+  });
+
+  it("re-homes displaced balanced to best task-cost eligible fast/powerful runner-up", () => {
+    const { initialBalanced, resolved } = displacedScene({
+      [slugify("p/fast-winner")]: 0.8,
+      [slugify("p/value-winner")]: 0.3,
+      [slugify("p/other-runner")]: 0.2,
+    });
+    const pools = {
+      cheap: [cheapWinner],
+      fast: [fastWinner, valueWinner, otherRunner, notBalancedEligible],
+      balanced: [fastWinner, valueWinner, otherRunner],
+      powerful: [powerfulWinner, valueWinner, otherRunner, notBalancedEligible],
+    };
+
+    const result = rehomeBalancedFromRunnerUpPool(initialBalanced, resolved, pools, aaMetrics);
+    expect(result.model?.model).toBe("value-winner");
+    expect(result.confidence).toBe(0.3);
+  });
+
+  it("leaves balanced unchanged when Jev's pick was not displaced", () => {
+    const balanced = asg("balanced", valueWinner, 0.8, {});
+    const resolved = {
+      cheap: asg("cheap", cheapWinner, 0.9, {}),
+      fast: asg("fast", fastWinner, 0.8, {}),
+      balanced,
+      powerful: asg("powerful", powerfulWinner, 0.9, {}),
+    };
+    expect(rehomeBalancedFromRunnerUpPool(balanced, resolved, {}, aaMetrics)).toBe(balanced);
+  });
+
+  it("does not change behavior when AA metrics are unavailable", () => {
+    const { initialBalanced, resolved } = displacedScene({});
+    expect(rehomeBalancedFromRunnerUpPool(initialBalanced, resolved, {}, new Map())).toBe(resolved.balanced);
+  });
+
+  it("falls back to the existing collision result when the runner-up pool is empty", () => {
+    const { initialBalanced, resolved } = displacedScene({});
+    const result = rehomeBalancedFromRunnerUpPool(initialBalanced, resolved, { balanced: [], fast: [], powerful: [] }, aaMetrics);
+    expect(result).toBe(resolved.balanced);
   });
 });
 
@@ -476,6 +617,27 @@ describe("resolveCollisions", () => {
     expect(out.cheap.model?.model).toBe("a-flash");   // higher confidence keeps
     expect(out.fast.model?.model).toBe("d-max");      // next-best from its own probabilities
     expect(out.fast.confidence).toBe(0.3);
+  });
+
+  it("keeps a collision loser inside its own filtered tier pool", () => {
+    const shared: CatalogModel = { provider: "p", model: "shared", context: 1_000_000, maxOut: 64_000, thinking: false, images: false };
+    const outsideFastPool: CatalogModel = { provider: "p", model: "outside", context: 1_000_000, maxOut: 64_000, thinking: false, images: false };
+    const fastEligible: CatalogModel = { provider: "p", model: "fast-eligible", context: 1_000_000, maxOut: 64_000, thinking: false, images: false };
+    const powerfulModel: CatalogModel = { provider: "p", model: "power", context: 1_000_000, maxOut: 64_000, thinking: true, images: false };
+    const input = {
+      cheap: asg("cheap", shared, 0.9, { [slug(shared)]: 0.9 }),
+      fast: asg("fast", shared, 0.8, {
+        [slug(shared)]: 0.8,
+        [slug(outsideFastPool)]: 0.7,
+        [slug(fastEligible)]: 0.2,
+      }),
+      balanced: asg("balanced", undefined, 0, {}),
+      powerful: asg("powerful", powerfulModel, 0.95, { [slug(powerfulModel)]: 0.95 }),
+    };
+    const pools = { fast: [shared, fastEligible] };
+
+    const out = resolveCollisions(input, [shared, outsideFastPool, fastEligible, powerfulModel], pools);
+    expect(out.fast.model?.model).toBe("fast-eligible");
   });
 
   it("displaces the lower tier even when it served first", () => {
@@ -637,9 +799,29 @@ describe("defaultTierFilters / applyTierFilters", () => {
 
   it("returns the documented defaults per tier", () => {
     expect(defaultTierFilters("cheap")).toEqual({ minContext: 128_000, requireThinking: false, requireImages: false });
-    expect(defaultTierFilters("fast")).toEqual({ minContext: 100_000, requireThinking: false, requireImages: false });
+    expect(defaultTierFilters("fast")).toEqual({ minContext: 100_000, requireThinking: false, requireImages: false, requireLatencyData: true });
     expect(defaultTierFilters("balanced")).toEqual({ minContext: 200_000, requireThinking: false, requireImages: true });
     expect(defaultTierFilters("powerful")).toEqual({ minContext: 500_000, requireThinking: true, requireImages: false });
+  });
+
+  it("fast drops latency-blind models only when AA data exists", () => {
+    const pool: CatalogModel[] = [
+      { provider: "hyper", model: "fast-measured", context: 200_000, maxOut: 64_000, thinking: false, images: false },
+      { provider: "hyper", model: "fast-blind", context: 200_000, maxOut: 64_000, thinking: false, images: false },
+    ];
+    const metrics = buildAaMetricsMap({
+      timestamp: 0,
+      data: [{ modelId: "fastmeasured", intelligenceIndex: 40, speedTokensPerSec: 200, ttftSeconds: 0.5 }],
+    });
+
+    // With AA data: blind model removed from fast.
+    expect(applyTierFilters("fast", pool, undefined, metrics).map((m) => m.model)).toEqual(["fast-measured"]);
+    // No AA data: degrade gracefully, keep both.
+    expect(applyTierFilters("fast", pool).map((m) => m.model)).toEqual(["fast-measured", "fast-blind"]);
+    // Empty map (fetch failed): also keep both.
+    expect(applyTierFilters("fast", pool, undefined, buildAaMetricsMap(null)).length).toBe(2);
+    // Other tiers are not latency-gated.
+    expect(applyTierFilters("cheap", pool, undefined, metrics).length).toBe(2);
   });
 
   it("cheap keeps small non-thinking models", () => {

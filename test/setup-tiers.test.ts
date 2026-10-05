@@ -18,6 +18,17 @@ vi.mock("@typesafe-ai/sdk", () => ({
     systemOne = systemOneMock;
   },
 }));
+// Keep tests hermetic: never read the developer's real ~/.pi AA cache.
+vi.mock("../src/aa-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/aa-client.js")>();
+  return {
+    ...actual,
+    getAaBenchmarks: vi.fn(async () => aaBenchmarksMock ?? null),
+  };
+});
+
+/** Set to exercise AA-enriched paths (latency gate, task-cost, balanced re-home). */
+let aaBenchmarksMock: Awaited<ReturnType<typeof import("../src/aa-client.js").getAaBenchmarks>> = null;
 
 import { registerTools } from "../src/tools.js";
 
@@ -162,6 +173,64 @@ describe("smart-router-setup-tiers", () => {
     expect(systemOneMock).toHaveBeenCalledTimes(1);
     // The low-confidence pick is still proposed as-is.
     expect(details.routes.balanced.model).toBe("hyper/b-plus");
+  });
+
+  it("re-homes displaced balanced via AA-backed runner-up pool", async () => {
+    // AA reports latency for a-flash and pricing for a-flash only (via the
+    // registry). balanced and fast both pick a-flash; cheap (0.9) keeps it, so
+    // fast and balanced are both losers. The balanced re-home then selects from
+    // the fast/powerful runner-ups that still pass balanced's filters.
+    aaBenchmarksMock = {
+      timestamp: Date.now(),
+      data: [
+        { modelId: "aflash", intelligenceIndex: 40, codingIndex: 80, speedTokensPerSec: 300, ttftSeconds: 0.2 },
+        { modelId: "bplus", intelligenceIndex: 50, codingIndex: 70, speedTokensPerSec: 200, ttftSeconds: 0.3 },
+      ],
+    };
+    const answers = {
+      // fast beats balanced for a-flash (0.8 > 0.7) → balanced is the loser.
+      cheap: tierAnswer("hyper_a_flash", 0.95, { hyper_a_flash: 0.95 }),
+      fast: tierAnswer("hyper_a_flash", 0.8, { hyper_a_flash: 0.8, hyper_b_plus: 0.12, hyper_d_general: 0.04 }),
+      balanced: tierAnswer("hyper_a_flash", 0.7, { hyper_a_flash: 0.7, hyper_b_plus: 0.1, hyper_d_general: 0.08 }),
+      powerful: tierAnswer("hyper_c_pro", 0.95, { hyper_c_pro: 0.95 }),
+    };
+    primeJev(answers);
+
+    // Richer one-off catalog: a-flash (featured), d-general (featured balanced
+    // runner-up), plus the standard fixture models.
+    execFileMock.mockImplementationOnce((_c, _a, _o, cb) =>
+      cb(null, { stdout: [
+        "provider  model          context  max-out  thinking  images",
+        "hyper     a-flash        1.0M     64K      no        no",
+        "hyper     b-plus         256K     64K      no        yes",
+        "hyper     c-pro          1.0M     384K     yes       no",
+        "hyper     d-general      1.0M     128K     yes       yes",
+      ].join("\n") }),
+    );
+    aaBenchmarksMock = {
+      timestamp: Date.now(),
+      data: [
+        { modelId: "dgeneral", intelligenceIndex: 60, codingIndex: 72, speedTokensPerSec: 150, ttftSeconds: 0.6 },
+        { modelId: "bplus", intelligenceIndex: 50, codingIndex: 70, speedTokensPerSec: 200, ttftSeconds: 0.3 },
+        { modelId: "aflash", intelligenceIndex: 40, codingIndex: 80, speedTokensPerSec: 300, ttftSeconds: 0.2 },
+      ],
+    };
+
+    const { details } = await run({ providers: ["hyper"] });
+    aaBenchmarksMock = null;
+    const byTier = Object.fromEntries(details.assignments.map((a: any) => [a.tier, a]));
+    // cheap keeps a-flash; powerful keeps c-pro.
+    expect(byTier.cheap.model).toBe("hyper/a-flash");
+    expect(byTier.powerful.model).toBe("hyper/c-pro");
+    // cheap (0.95) keeps a-flash; fast is the loser and re-picks inside its
+    // latency-gated pool → b-plus (scored 0.12).
+    expect(byTier.fast.model).toBe("hyper/b-plus");
+    // balanced's scored fallback (b-plus) is now claimed by fast, so its raw
+    // fallback would be d-general (0.08); the re-home finds the same model as
+    // the best unclaimed task-cost runner-up and keeps the scored confidence.
+    expect(byTier.balanced.model).toBe("hyper/d-general");
+    expect(byTier.balanced.collisionResolved).toBe(true);
+    expect(byTier.balanced.confidence).toBeCloseTo(0.08);
   });
 
   it("throws when no models are found", async () => {

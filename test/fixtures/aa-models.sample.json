@@ -1,0 +1,111 @@
+{
+  "data": [
+    {
+      "id": "fixture-id-1",
+      "name": "Synthetic Pro Model",
+      "slug": "synthetic-pro",
+      "release_date": "2026-08-13",
+      "model_creator": {
+        "id": "fc-1",
+        "name": "Synthetic Creator",
+        "slug": "synthetic"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 36.0,
+        "artificial_analysis_coding_index": 68.8
+      },
+      "pricing": {
+        "price_1m_blended_3_to_1": 1.98,
+        "price_1m_input_tokens": 1.32,
+        "price_1m_output_tokens": 3.96
+      },
+      "performance": {
+        "median_output_tokens_per_second": 116.078,
+        "median_time_to_first_token_seconds": 1.039
+      },
+      "artificial_analysis_intelligence_index_cost": null
+    },
+    {
+      "id": "fixture-id-2",
+      "name": "Synthetic Flash Model",
+      "slug": "synthetic-flash",
+      "release_date": "2026-07-31",
+      "model_creator": {
+        "id": "fc-1",
+        "name": "Synthetic Creator",
+        "slug": "synthetic"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 34.3,
+        "artificial_analysis_coding_index": 69.1
+      },
+      "pricing": {
+        "price_1m_blended_3_to_1": 0.66,
+        "price_1m_input_tokens": 0.44,
+        "price_1m_output_tokens": 1.32
+      },
+      "performance": {
+        "median_output_tokens_per_second": 224.016,
+        "median_time_to_first_token_seconds": 0.797
+      },
+      "artificial_analysis_intelligence_index_cost": null
+    },
+    {
+      "id": "fixture-id-3",
+      "name": "Synthetic Luna Model",
+      "slug": "synthetic-luna",
+      "release_date": "2026-09-10",
+      "model_creator": {
+        "id": "fc-2",
+        "name": "Synthetic Labs",
+        "slug": "synthetic-labs"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 38.1
+      },
+      "pricing": {
+        "price_1m_blended_3_to_1": 0.2,
+        "price_1m_input_tokens": 0.1,
+        "price_1m_output_tokens": 0.5
+      },
+      "performance": {
+        "median_output_tokens_per_second": 136.423,
+        "median_time_to_first_token_seconds": 83.996
+      },
+      "artificial_analysis_intelligence_index_cost": null
+    },
+    {
+      "id": "fixture-id-4",
+      "name": "Synthetic Opus Model",
+      "slug": "synthetic-opus",
+      "release_date": "2026-09-22",
+      "model_creator": {
+        "id": "fc-3",
+        "name": "Synthetic AI",
+        "slug": "synthetic-ai"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 57.6,
+        "artificial_analysis_coding_index": 61.2
+      },
+      "pricing": {
+        "price_1m_blended_3_to_1": 4.6,
+        "price_1m_input_tokens": 3.1,
+        "price_1m_output_tokens": 9.2
+      },
+      "performance": {
+        "median_output_tokens_per_second": 97.574,
+        "median_time_to_first_token_seconds": 449.114
+      },
+      "artificial_analysis_intelligence_index_cost": null
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "page_size": 200,
+    "total_pages": 1,
+    "has_more": false
+  },
+  "intelligence_index_version": 4.3,
+  "tier": "free"
+}

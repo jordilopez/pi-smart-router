@@ -278,6 +278,60 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 > new session (no `/typesafe enable` prompt), export `PI_TYPESAFE_ENABLED=1` in
 > your shell.
 
+### Artificial Analysis benchmarks
+
+The tier classifier can enrich candidate descriptions with real-world benchmark
+metrics (intelligence index, output speed, latency) from
+[Artificial Analysis](https://artificialanalysis.ai/). When available, these
+metrics are appended to each model's description string and the tier-weighting
+(intelligence vs. speed per tier) is included in the Jev instructions, giving
+the classifier richer signals to distinguish similarly-priced models.
+
+1. Create a key at [artificialanalysis.ai](https://artificialanalysis.ai) and
+   export it **in the environment that runs Pi** (do not paste it into config
+   files):
+
+   ```sh
+   export AA_API_KEY="..."   # ~/.zshrc / ~/.bashrc, or a launcher
+   ```
+
+2. **That's it.** The classifier uses the key automatically. There is no
+   config-file change — AA integration is entirely environment-driven, unlike
+   TypeSafe which requires both the env var and `classifier.model`.
+
+3. Verification is indirect — run `smart-router-setup-tiers` with the key
+   set and inspect the candidate descriptions in the `state` / `criteria`
+   for `(intelligence 0.95, speed 120.5 tok/s, TTFT 0.2s)` columns.
+
+**Key is optional.** On a machine that has never fetched, no `AA_API_KEY`
+means the classifier behaves exactly as before — no errors, no benchmark
+columns. Benchmark data is cached locally in
+`~/.pi/agent/aa-benchmarks-cache.json` with a 7-day TTL. When a refresh fails
+(network, expired key, rate limit), the stale cache is still used, so
+enrichment degrades rather than disappears. A cached file is also read when the
+key is unset: `AA_API_KEY` gates *fetching*, not reading the local cache.
+
+- **Force a refresh:** delete `~/.pi/agent/aa-benchmarks-cache.json` (the next
+  classification refetches).
+- **Disable entirely:** unset `AA_API_KEY` **and** delete the cache file. No
+  config change is needed.
+
+What the classifier does with the data:
+
+- **Candidate columns** — each match adds an `(intelligence …, speed …, TTFT …)`
+  suffix to the candidate description plus a `task-cost` index, the blended
+  registry price divided by a solve-probability derived from AA's coding
+  intelligence score. Task-cost is a *price-per-solved-unit index*, not dollars
+  per task — only its ordering is meaningful.
+- **Fast-tier latency gate** — models with no measured AA throughput/latency are
+  dropped from the `fast` tier when AA data exists (skipped entirely offline).
+- **Balanced re-home** — when balanced's top pick is also claimed by fast or
+  powerful, balanced is re-assigned to the best task-cost runner-up from the
+  fast/powerful pools that still passes balanced's own filters.
+
+Data from these benchmarks is used under the terms of the Artificial Analysis
+data license.
+
 ## Route visibility in Pi's UI
 
 - **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Additionally, a compact footer status shows the routing tier: `⚡ fast`, `🪙 cheap-code · rule:typos`, `💎 powerful · classifier`, or `⚡ fast · retry-fallback` when a retry switched backends. It briefly shows `… classifying` while the classifier runs, and is cleared on session shutdown.
@@ -292,6 +346,7 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 - **`Model not found in registry: provider/modelId`** — the route references a model Pi doesn't know. Check spelling (model IDs are exact and lowercase) and run `pi --list-models <provider>` to see the catalog.
 - **`No compatible backend model available for any configured route`** - every route failed the availability/compatibility checks (missing auth, model missing, context window too small for the current conversation, etc.).
 - **Config error at startup** - pi-smart-router.json is invalid (bad JSON, unknown route reference, duplicate rule id, malformed `provider/modelId`, wrong `version`). Fix the file; the message names the offending path.
+- **AA_API_KEY is set but no AA data appears** — the AA API call may have failed (network issue, expired key, rate limit). Check logs; the classifier silently falls back to today's behavior. Cache (if present) is used as a stale fallback; force a refresh by deleting `~/.pi/agent/aa-benchmarks-cache.json`.
 - **The powerful model shows up more than expected** — check your `mediumMax` (default 0.80) and your rules; the policy deliberately keeps the powerful model rare and out of the fallback chain.
 
 ## Limitations
@@ -300,6 +355,7 @@ vs. "analyze this diff"). Jev is a judgment model, not a chat model:
 - `reasoning: "off"` cannot force-disable thinking on providers that always think; it only avoids requesting reasoning. `preserve` keeps the session's thinking level.
 - Backend availability is evaluated when the decision is made. Mid-turn failures surface as stream errors; the next automatic **retry** re-enters the router, which switches backends on overflow/overload signatures (see [Routing decision order](#routing-decision-order)).
 - The router does not evaluate answer quality or test outcomes after a turn starts.
+- Artificial Analysis benchmark data can be up to 7 days old (cache TTL). Not every model in the Pi registry has an AA match — unmatched models get no benchmark columns. Benchmark scores are third-party estimates and may not reflect every provider's specific hosting configuration.
 
 ## Development
 
