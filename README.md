@@ -336,12 +336,12 @@ data license.
 
 When `smart-router-setup-tiers` receives more than one provider, each provider's
 catalog is classified independently (its own Jev call) and the highest-confidence
-pick per tier wins, with alphabetical provider id as the deterministic tiebreak.
-The response includes `perProviderResults` — every provider's per-tier table — so
-you can see which provider won each tier and what the losers proposed. Single-provider
-requests behave exactly as before (one Jev call, no `perProviderResults`). Cost:
-one Jev call per provider instead of one combined call, and Jev never compares
-candidates across providers directly.
+pick per tier wins; when confidences tie, the provider listed earlier in the
+caller's `providers[]` array wins. The response includes `perProviderResults` —
+every provider's per-tier table — so you can see which provider won each tier and
+what the losers proposed. Single-provider requests behave exactly as before (one
+Jev call, no `perProviderResults`). Cost: one Jev call per provider instead of
+one combined call, and Jev never compares candidates across providers directly.
 
 ## Route visibility in Pi's UI
 

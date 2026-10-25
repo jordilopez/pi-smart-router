@@ -670,8 +670,13 @@ async function classifyProvider(
 }
 
 /**
- * Pick the max-confidence provider per tier (tiebreak: alphabetical provider
- * id) and build the ready-to-write route table.
+ * Pick the max-confidence provider per tier and build the ready-to-write
+ * route table.
+ *
+ * Sort by Jev confidence descending only — `Array.prototype.sort` is stable
+ * (ES2019), so providers declared earlier in the `providers[]` array win ties.
+ * Reorder `providers` to change the tiebreak; there's no implicit preference
+ * (no cost, alphabetical, or hash fallback).
  *
  * Only candidates with a real (non-null) pick compete for a route — a null
  * pick means the tier lost its only candidate to a collision, so it can't
@@ -687,11 +692,7 @@ function selectTierWinners(perTier: Record<RouteTier, ProviderPick[]>): {
     const picks = perTier[tier];
     const withModel = picks
       .filter((p): p is ProviderPick & { model: CatalogModel } => p.model !== undefined)
-      .sort((x, y) => {
-        if (x.confidence !== y.confidence) return y.confidence - x.confidence;
-        if (x.provider !== y.provider) return x.provider < y.provider ? -1 : 1;
-        return 0;
-      });
+      .sort((x, y) => y.confidence - x.confidence);
 
     if (withModel.length === 0) {
       const empty = picks[0];
@@ -720,7 +721,9 @@ function selectTierWinners(perTier: Record<RouteTier, ProviderPick[]>): {
  * Per-provider tier classification + winner selection.
  *
  * Classify each provider's catalog separately and pick the highest-confidence
- * winner per tier (deterministic tiebreak: alphabetical provider id). Returns:
+ * winner per tier; ties resolve to the provider listed earlier in the caller's
+ * `providers[]` array (stable sort — no implicit alphabetical or cost-based
+ * fallback). Returns:
  *
  * - `routes`: ready-to-write route table keyed by route name, derived from the
  *   per-tier winners.
@@ -957,7 +960,7 @@ export function registerTools(pi: ExtensionAPI): void {
     name: "smart-router-setup-tiers",
     label: "Smart Router Setup Tiers",
     description:
-      "Classifies the Pi model catalog into the four smart-router tiers in one call. Single-provider path: fetch its catalog, apply per-tier capability filters (the fast tier also requires measured AA latency when AA data is available), ask TypeSafe Jev (one choice question per tier, single request), resolve duplicate picks deterministically inside each tier's pool, re-home a collision-displaced balanced pick from eligible fast/powerful runner-ups. Multi-provider path: classify each provider's catalog independently in its own Jev call, then pick the highest-confidence winner per tier (alphabetical provider id as tiebreak); all providers' results are returned in `perProviderResults` so the caller can see which provider won each tier. Either way, returns a proposed assignment with ready-to-write routes. Does NOT write the config — pass the returned routes to smart-router-update-routes after user approval. Takes Jev's first response as-is; low confidence is surfaced as a warning, never re-run.",
+      "Classifies the Pi model catalog into the four smart-router tiers in one call. Single-provider path: fetch its catalog, apply per-tier capability filters (the fast tier also requires measured AA latency when AA data is available), ask TypeSafe Jev (one choice question per tier, single request), resolve duplicate picks deterministically inside each tier's pool, re-home a collision-displaced balanced pick from eligible fast/powerful runner-ups. Multi-provider path: classify each provider's catalog independently in its own Jev call, then pick the highest-confidence winner per tier (callers' `providers[]` order as tiebreak — first-listed provider wins when confidences match); all providers' results are returned in `perProviderResults` so the caller can see which provider won each tier. Either way, returns a proposed assignment with ready-to-write routes. Does NOT write the config — pass the returned routes to smart-router-update-routes after user approval. Takes Jev's first response as-is; low confidence is surfaced as a warning, never re-run.",
     promptSnippet: "Classify models into tiers with Jev and propose routes",
     parameters: {
       type: "object",
