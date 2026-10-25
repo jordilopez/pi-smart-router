@@ -26,3 +26,16 @@ updates:
           - "*"
         update-types:
           - "minor"
+    ignore:
+      # Major bumps are applied manually. Dependabot majors here have historically
+      # skipped multiple majors at once (typescript 5→7, @types/node 22→26) and
+      # needed human migration work anyway, so opening auto-PRs for them is noise.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@earendil-works/pi-coding-agent"
+        update-types: ["version-update:semver-major"]
+      # The SDK ships breaking changes in minors; review each one in isolation.
+      - dependency-name: "@typesafe-ai/sdk"
+        update-types: ["version-update:semver-minor"]
