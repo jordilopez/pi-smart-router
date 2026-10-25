@@ -370,7 +370,10 @@ one combined call, and Jev never compares candidates across providers directly.
 
 ## Development
 
+Node 22 or newer is required (`engines.node`). `.nvmrc` pins the version CI and development use — run `nvm use` to match it.
+
 ```sh
+nvm use            # or any Node >=22
 npm install
 npx tsc --noEmit   # typecheck (resolves pi packages via tsconfig paths)
 npx vitest run     # unit tests (classifier, route resolver, config, stream contract)
