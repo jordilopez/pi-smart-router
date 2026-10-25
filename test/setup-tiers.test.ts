@@ -75,6 +75,32 @@ function primeJev(answers: Record<string, unknown>) {
   systemOneMock.mockResolvedValue({ answers, usage: { input_tokens: 100, output_tokens: 20 } });
 }
 
+/**
+ * Stub `pi --list-models <provider>` for two disjoint provider catalogs.
+ * `rowsByProvider[id]` is the list of catalog lines for that provider; the
+ * header row is added so the per-provider format stays consistent. When
+ * supplied, `onProvider` runs synchronously per call with the resolved
+ * provider id — useful for tests that flip a Jev answer set when the catalog
+ * switches.
+ */
+function stubDualProviderCatalog(
+  rowsByProvider: Record<string, string[]>,
+  fallbackProvider: string,
+  onProvider?: (provider: string) => void,
+): void {
+  execFileMock.mockImplementation(
+    (_cmd, args, _opts, cb) => {
+      const provider = args.find((a) => a !== "--list-models") ?? fallbackProvider;
+      onProvider?.(provider);
+      const rows = [
+        "provider  model  context  max-out  thinking  images",
+        ...(rowsByProvider[provider] ?? []),
+      ];
+      cb(null, { stdout: rows.join("\n") });
+    },
+  );
+}
+
 const NOOP_SIGNAL = new AbortController().signal;
 
 async function run(params: Record<string, unknown>) {
@@ -245,6 +271,25 @@ describe("smart-router-setup-tiers", () => {
     // Provider A wins cheap and balanced; provider B wins fast and powerful.
     // The flat `assignments` array should surface winners per tier; the
     // `perProviderResults` should expose both providers' classifications.
+    let currentProvider = "provider-a";
+    stubDualProviderCatalog(
+      {
+        "provider-a": [
+          "provider-a    x      256K     64K      no        no",
+          "provider-a    y      256K     64K      no        no",
+          "provider-a    z      256K     64K      no        yes",
+          "provider-a    w      512K     384K     yes       no",
+        ],
+        "provider-b": [
+          "provider-b    x      256K     64K      no        no",
+          "provider-b    y      256K     64K      no        no",
+          "provider-b    z      256K     64K      no        yes",
+          "provider-b    w      512K     384K     yes       no",
+        ],
+      },
+      "provider-a",
+      (p) => { currentProvider = p; },
+    );
     systemOneMock.mockImplementation(async () => ({
       answers: {
         cheap: tierAnswer(
@@ -270,28 +315,7 @@ describe("smart-router-setup-tiers", () => {
       usage: { input_tokens: 100, output_tokens: 20 },
     }));
 
-    let currentProvider = "provider-a";
-    execFileMock.mockImplementation((_c: string, args: string[], _o: unknown, cb: (e: unknown, out: { stdout: string }) => void) => {
-      const providerArg = args.find((a) => a !== "--list-models") ?? "provider-a";
-      currentProvider = providerArg;
-      const header = "provider      model  context  max-out  thinking  images";
-      const rows: string[] = [header];
-      if (providerArg === "provider-a") {
-        rows.push("provider-a    x      256K     64K      no        no");
-        rows.push("provider-a    y      256K     64K      no        no");
-        rows.push("provider-a    z      256K     64K      no        yes");
-        rows.push("provider-a    w      512K     384K     yes       no");
-      } else {
-        rows.push("provider-b    x      256K     64K      no        no");
-        rows.push("provider-b    y      256K     64K      no        no");
-        rows.push("provider-b    z      256K     64K      no        yes");
-        rows.push("provider-b    w      512K     384K     yes       no");
-      }
-      cb(null, { stdout: rows.join("\n") });
-    });
-
-    const { details } = await run({ providers: ["provider-a", "provider-b"] })
-      .finally(() => { currentProvider = "provider-a"; });
+    const { details } = await run({ providers: ["provider-a", "provider-b"] });
 
     // Jev was called once per provider — two calls total.
     expect(systemOneMock).toHaveBeenCalledTimes(2);
@@ -318,6 +342,24 @@ describe("smart-router-setup-tiers", () => {
     // Both providers score at the same confidence per tier. The "earlier"
     // provider by alphabetical order (alpha < beta) must win ties.
     let currentProvider = "alpha";
+    stubDualProviderCatalog(
+      {
+        alpha: [
+          "alpha     x      256K     64K      no        no",
+          "alpha     y      256K     64K      no        no",
+          "alpha     z      256K     64K      no        yes",
+          "alpha     w      512K     384K     yes       no",
+        ],
+        beta: [
+          "beta      x      256K     64K      no        no",
+          "beta      y      256K     64K      no        no",
+          "beta      z      256K     64K      no        yes",
+          "beta      w      512K     384K     yes       no",
+        ],
+      },
+      "alpha",
+      (p) => { currentProvider = p; },
+    );
     systemOneMock.mockImplementation(async () => ({
       answers: {
         cheap: tierAnswer(currentProvider === "alpha" ? "alpha_x" : "beta_x", 0.7, {}),
@@ -328,27 +370,7 @@ describe("smart-router-setup-tiers", () => {
       usage: { input_tokens: 100, output_tokens: 20 },
     }));
 
-    execFileMock.mockImplementation((_c: string, args: string[], _o: unknown, cb: (e: unknown, out: { stdout: string }) => void) => {
-      const providerArg = args.find((a) => a !== "--list-models") ?? "alpha";
-      currentProvider = providerArg;
-      const header = "provider  model  context  max-out  thinking  images";
-      const rows: string[] = [header];
-      if (providerArg === "alpha") {
-        rows.push("alpha     x      256K     64K      no        no");
-        rows.push("alpha     y      256K     64K      no        no");
-        rows.push("alpha     z      256K     64K      no        yes");
-        rows.push("alpha     w      512K     384K     yes       no");
-      } else {
-        rows.push("beta      x      256K     64K      no        no");
-        rows.push("beta      y      256K     64K      no        no");
-        rows.push("beta      z      256K     64K      no        yes");
-        rows.push("beta      w      512K     384K     yes       no");
-      }
-      cb(null, { stdout: rows.join("\n") });
-    });
-
-    const { details } = await run({ providers: ["alpha", "beta"] })
-      .finally(() => { currentProvider = "alpha"; });
+    const { details } = await run({ providers: ["alpha", "beta"] });
 
     const byTier = Object.fromEntries(details.assignments.map((a: any) => [a.tier, a]));
     expect(byTier.cheap.model).toBe("alpha/x");

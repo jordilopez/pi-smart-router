@@ -551,12 +551,176 @@ function loadConfig(configPath: string): any {
   }
 }
 
+/** Canonical route name for each tier. */
+const ROUTE_NAMES: Record<RouteTier, string> = {
+  cheap: "cheap-code",
+  fast: "fast",
+  balanced: "balanced",
+  powerful: "powerful",
+};
+
+/** One tier's proposed route plus the diagnostics behind the pick. */
+interface TierAssignment {
+  tier: RouteTier;
+  route: string;
+  model: string | null;
+  confidence: number;
+  collisionResolved: boolean;
+}
+
+/** A provider's resolved pick for one tier, before cross-provider winner selection. */
+interface ProviderPick {
+  provider: string;
+  tier: RouteTier;
+  model: CatalogModel | undefined;
+  confidence: number;
+  collisionResolved: boolean;
+}
+
+/** Inputs shared by every per-provider classification pass. */
+interface ProviderClassificationOptions {
+  excludeModels?: string[];
+  tierOverrides?: Partial<Record<RouteTier, Partial<TierFilters>>>;
+  narrow?: boolean;
+  aaMetrics: Map<string, AaModelMetrics>;
+  signal?: AbortSignal;
+  modelRegistry?: { find(provider: string, modelId: string): unknown };
+}
+
+/** Format a resolved pick as a route assignment (`model` null when unassigned). */
+function toTierAssignment(pick: {
+  tier: RouteTier;
+  model: CatalogModel | undefined;
+  confidence: number;
+  collisionResolved: boolean;
+}): TierAssignment {
+  return {
+    tier: pick.tier,
+    route: ROUTE_NAMES[pick.tier],
+    model: pick.model ? `${pick.model.provider}/${pick.model.model}` : null,
+    confidence: pick.confidence,
+    collisionResolved: pick.collisionResolved,
+  };
+}
+
+/**
+ * Classify one provider's catalog into the four tiers.
+ *
+ * Returns the provider's route-shaped assignments plus the raw picks used for
+ * cross-provider winner selection, or `null` when the provider has no models
+ * left after exclusions. Warnings are appended to the caller-supplied list.
+ */
+async function classifyProvider(
+  provider: string,
+  options: ProviderClassificationOptions,
+  warnings: string[],
+): Promise<{ assignments: TierAssignment[]; picks: ProviderPick[] } | null> {
+  const { excludeModels, tierOverrides, narrow, aaMetrics, signal, modelRegistry } = options;
+
+  let models = await fetchCatalogModels([provider], signal, modelRegistry);
+  if (excludeModels && excludeModels.length > 0) {
+    const excludeSet = new Set(excludeModels.map((id) => id.toLowerCase()));
+    models = models.filter((m) => !excludeSet.has(m.model.toLowerCase()));
+  }
+  models = deduplicateModels(models);
+
+  if (models.length === 0) {
+    warnings.push(`provider '${provider}': no models available after filters/exclusions`);
+    return null;
+  }
+
+  // Per-tier capability filter pools.
+  const tierPools = {} as Record<RouteTier, CatalogModel[]>;
+  for (const tier of TIERS) {
+    const pool = applyTierFilters(tier, models, tierOverrides?.[tier], aaMetrics);
+    tierPools[tier] = pool;
+    if (pool.length === 0) {
+      warnings.push(
+        `provider '${provider}' tier '${tier}': no candidate passes capability filters`,
+      );
+    }
+  }
+
+  const jev = await jevTierClassification(models, {
+    narrow: narrow !== false,
+    tierPools,
+    aaMetrics,
+  });
+  const allPoolModels = [...new Set(TIERS.flatMap((t) => tierPools[t]))];
+  const resolved = resolveCollisions(jev.assignments, allPoolModels, tierPools);
+  resolved.balanced = rehomeBalancedFromRunnerUpPool(
+    jev.assignments.balanced,
+    resolved,
+    tierPools,
+    aaMetrics,
+  );
+
+  const picks = TIERS.map((tier): ProviderPick => {
+    const pick = resolved[tier];
+    return {
+      provider,
+      tier,
+      model: pick.model,
+      confidence: pick.confidence,
+      collisionResolved: pick.model !== jev.assignments[tier].model,
+    };
+  });
+
+  return { assignments: picks.map(toTierAssignment), picks };
+}
+
+/**
+ * Pick the max-confidence provider per tier (tiebreak: alphabetical provider
+ * id) and build the ready-to-write route table.
+ *
+ * Only candidates with a real (non-null) pick compete for a route — a null
+ * pick means the tier lost its only candidate to a collision, so it can't
+ * produce one. When nobody fields a real pick, the first null pick is surfaced
+ * so the tier's `collisionResolved` signal still reaches the caller.
+ */
+function selectTierWinners(perTier: Record<RouteTier, ProviderPick[]>): {
+  routes: Record<string, { model: string; reasoning: string }>;
+  assignments: TierAssignment[];
+} {
+  const routes: Record<string, { model: string; reasoning: string }> = {};
+  const assignments = TIERS.map((tier): TierAssignment => {
+    const picks = perTier[tier];
+    const withModel = picks
+      .filter((p): p is ProviderPick & { model: CatalogModel } => p.model !== undefined)
+      .sort((x, y) => {
+        if (x.confidence !== y.confidence) return y.confidence - x.confidence;
+        if (x.provider !== y.provider) return x.provider < y.provider ? -1 : 1;
+        return 0;
+      });
+
+    if (withModel.length === 0) {
+      const empty = picks[0];
+      return empty
+        ? toTierAssignment(empty)
+        : toTierAssignment({
+            tier,
+            model: undefined,
+            confidence: 0,
+            collisionResolved: false,
+          });
+    }
+
+    const winner = withModel[0];
+    routes[ROUTE_NAMES[tier]] = {
+      model: `${winner.model.provider}/${winner.model.model}`,
+      reasoning: winner.model.thinking ? (tier === "powerful" ? "high" : "low") : "preserve",
+    };
+    return toTierAssignment(winner);
+  });
+
+  return { routes, assignments };
+}
+
 /**
  * Per-provider tier classification + winner selection.
  *
- * When more than one provider is requested, classify each provider's catalog
- * separately and pick the highest-confidence winner per tier (deterministic
- * tiebreak: alphabetical provider id). Returns:
+ * Classify each provider's catalog separately and pick the highest-confidence
+ * winner per tier (deterministic tiebreak: alphabetical provider id). Returns:
  *
  * - `routes`: ready-to-write route table keyed by route name, derived from the
  *   per-tier winners.
@@ -581,55 +745,19 @@ async function setupTiersMultiProvider(
 ): Promise<{
   routes: Record<string, { model: string; reasoning: string }>;
   warnings: string[];
-  assignments: Array<{
-    tier: RouteTier;
-    route: string;
-    model: string | null;
-    confidence: number;
-    collisionResolved: boolean;
-  }>;
-  perProviderResults?: Array<{
-    provider: string;
-    assignments: Array<{
-      tier: RouteTier;
-      route: string;
-      model: string | null;
-      confidence: number;
-      collisionResolved: boolean;
-    }>;
-  }>;
+  assignments: TierAssignment[];
+  perProviderResults?: Array<{ provider: string; assignments: TierAssignment[] }>;
 }> {
-  const ROUTE_NAMES: Record<RouteTier, string> = {
-    cheap: "cheap-code",
-    fast: "fast",
-    balanced: "balanced",
-    powerful: "powerful",
+  const options: ProviderClassificationOptions = {
+    excludeModels,
+    tierOverrides,
+    narrow,
+    aaMetrics,
+    signal,
+    modelRegistry: ctx?.modelRegistry,
   };
-
   const warnings: string[] = [];
-  const perProviderResults: Array<{
-    provider: string;
-    assignments: Array<{
-      tier: RouteTier;
-      route: string;
-      model: string | null;
-      confidence: number;
-      collisionResolved: boolean;
-    }>;
-  }> = [];
-
-  // Per-provider pick. `model` is the resolved CatalogModel (or undefined
-  // when the tier was displaced to a null re-pick). `modelIsNull` distinguishes
-  // "lost the collision" from a normal pick — used to filter candidates for
-  // winner selection without losing `collisionResolved` in the flat output.
-  type ProviderPick = {
-    provider: string;
-    tier: RouteTier;
-    model: CatalogModel | undefined;
-    modelIsNull: boolean;
-    confidence: number;
-    collisionResolved: boolean;
-  };
+  const perProviderResults: Array<{ provider: string; assignments: TierAssignment[] }> = [];
   const perTier: Record<RouteTier, ProviderPick[]> = {
     cheap: [],
     fast: [],
@@ -638,134 +766,17 @@ async function setupTiersMultiProvider(
   };
 
   for (const provider of providers) {
-    let models = await fetchCatalogModels([provider], signal, ctx?.modelRegistry);
-    if (excludeModels && excludeModels.length > 0) {
-      const excludeSet = new Set(excludeModels.map((id) => id.toLowerCase()));
-      models = models.filter((m) => !excludeSet.has(m.model.toLowerCase()));
-    }
-    models = deduplicateModels(models);
-
-    if (models.length === 0) {
-      warnings.push(`provider '${provider}': no models available after filters/exclusions`);
-      continue;
-    }
-
-    // Per-tier capability filter pools.
-    const tierPools = {} as Record<RouteTier, CatalogModel[]>;
-    for (const tier of TIERS) {
-      const pool = applyTierFilters(tier, models, tierOverrides?.[tier], aaMetrics);
-      tierPools[tier] = pool;
-      if (pool.length === 0) {
-        warnings.push(
-          `provider '${provider}' tier '${tier}': no candidate passes capability filters`,
-        );
-      }
-    }
-
-    const jev = await jevTierClassification(models, {
-      narrow: narrow !== false,
-      tierPools,
-      aaMetrics,
-    });
-    const allPoolModels = [...new Set(TIERS.flatMap((t) => tierPools[t]))];
-    const resolved = resolveCollisions(jev.assignments, allPoolModels, tierPools);
-    resolved.balanced = rehomeBalancedFromRunnerUpPool(
-      jev.assignments.balanced,
-      resolved,
-      tierPools,
-      aaMetrics,
-    );
-
-    const assignments = TIERS.map((tier) => {
-      const pick = resolved[tier];
-      return {
-        tier,
-        route: ROUTE_NAMES[tier],
-        model: pick.model ? `${pick.model.provider}/${pick.model.model}` : null,
-        confidence: pick.confidence,
-        collisionResolved: pick.model !== jev.assignments[tier].model,
-      };
-    });
-    perProviderResults.push({ provider, assignments });
-
-    for (const tier of TIERS) {
-      const pick = resolved[tier];
-      perTier[tier].push({
-        provider,
-        tier,
-        model: pick.model,
-        modelIsNull: pick.model == null,
-        confidence: pick.confidence,
-        collisionResolved: pick.model !== jev.assignments[tier].model,
-      });
-    }
+    const classified = await classifyProvider(provider, options, warnings);
+    if (!classified) continue;
+    perProviderResults.push({ provider, assignments: classified.assignments });
+    for (const pick of classified.picks) perTier[pick.tier].push(pick);
   }
-
-  // Pick max-confidence winner per tier. Tiebreak: alphabetical provider id.
-  // Only candidates with a real (non-null) pick compete for the route — a
-  // null pick means the per-provider tier lost its only candidate to a
-  // collision, so it can't produce a route. When nobody fields a pick, fall
-  // back to a null candidate (any of them, since the per-provider collision
-  // state is what we want to surface). `collisionResolved` always reflects
-  // the picked candidate's state — useful diagnostic for "this tier lost
-  // its only candidate" even when no route was produced.
-  const routes: Record<string, { model: string; reasoning: string }> = {};
-  const assignments: Array<{
-    tier: RouteTier;
-    route: string;
-    model: string | null;
-    confidence: number;
-    collisionResolved: boolean;
-  }> = TIERS.map((tier) => {
-    const allPicks = perTier[tier];
-    const withModel = allPicks
-      .filter((c) => !c.modelIsNull)
-      .sort((x, y) => {
-        if (x.confidence !== y.confidence) return y.confidence - x.confidence;
-        if (x.provider !== y.provider) return x.provider < y.provider ? -1 : 1;
-        return 0;
-      });
-    if (withModel.length === 0) {
-      // No provider produced a real pick. Surface the first null candidate so
-      // the tier's `collisionResolved` signal still reaches the user.
-      const empty = allPicks[0];
-      if (!empty) {
-        return { tier, route: ROUTE_NAMES[tier], model: null, confidence: 0, collisionResolved: false };
-      }
-      return {
-        tier,
-        route: ROUTE_NAMES[tier],
-        model: null,
-        confidence: empty.confidence,
-        collisionResolved: empty.collisionResolved,
-      };
-    }
-    const winner = withModel[0];
-    if (!winner.model) {
-      return {
-        tier,
-        route: ROUTE_NAMES[tier],
-        model: null,
-        confidence: winner.confidence,
-        collisionResolved: winner.collisionResolved,
-      };
-    }
-    routes[ROUTE_NAMES[tier]] = {
-      model: `${winner.model.provider}/${winner.model.model}`,
-      reasoning: winner.model.thinking ? (tier === "powerful" ? "high" : "low") : "preserve",
-    };
-    return {
-      tier,
-      route: ROUTE_NAMES[tier],
-      model: `${winner.model.provider}/${winner.model.model}`,
-      confidence: winner.confidence,
-      collisionResolved: winner.collisionResolved,
-    };
-  });
 
   if (perProviderResults.length === 0) {
     throw new Error(`No models found for provider(s): ${providers.join(", ")}`);
   }
+
+  const { routes, assignments } = selectTierWinners(perTier);
 
   return {
     routes,
