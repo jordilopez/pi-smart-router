@@ -140,8 +140,8 @@ export async function typesafeClassify(
       if (!ALL_TIERS.includes(verdict)) return null;
       if (options.stats) {
         options.stats.elapsedMs = Date.now() - startedAt;
-        options.stats.inputTokens = usage.input_tokens;
-        options.stats.outputTokens = usage.output_tokens;
+        options.stats.inputTokens = usage.input_tokens ?? undefined;
+        options.stats.outputTokens = usage.output_tokens ?? undefined;
       }
 
       return verdict;

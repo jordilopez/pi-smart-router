@@ -110,8 +110,8 @@ export interface JevTierAssignment {
 /** Result of the single Jev classification pass over all four tiers. */
 export interface JevTierResult {
   assignments: Record<RouteTier, JevTierAssignment>;
-  /** Token usage reported by the API. */
-  usage?: { input_tokens: number; output_tokens: number };
+  /** Token usage reported by the API. Fields are `null` when the API does not report them. */
+  usage?: { input_tokens: number | null; output_tokens: number | null };
 }
 
 /** Minimal structural surface of TypeSafeClient.systemOne, for test injection. */
@@ -122,7 +122,7 @@ export interface SystemOneCaller {
     model?: string;
   }, options?: { signal?: AbortSignal; timeout?: number }): Promise<{
     answers: Record<string, { type?: string; choice: string; confidence: number; probabilities: Record<string, number> }>;
-    usage?: { input_tokens: number; output_tokens: number };
+    usage?: { input_tokens: number | null; output_tokens: number | null };
   }>;
 }
 
