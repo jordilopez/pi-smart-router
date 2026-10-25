@@ -14,10 +14,15 @@ updates:
       prefix-development: "chore"
       include: "scope"
     groups:
-      minor-and-patch:
+      patches:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      minors:
         applies-to: version-updates
         patterns:
           - "*"
         update-types:
           - "minor"
-          - "patch"
