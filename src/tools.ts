@@ -551,9 +551,244 @@ function loadConfig(configPath: string): any {
   }
 }
 
+/** Canonical route name for each tier. */
+const ROUTE_NAMES: Record<RouteTier, string> = {
+  cheap: "cheap-code",
+  fast: "fast",
+  balanced: "balanced",
+  powerful: "powerful",
+};
+
+/** One tier's proposed route plus the diagnostics behind the pick. */
+interface TierAssignment {
+  tier: RouteTier;
+  route: string;
+  model: string | null;
+  confidence: number;
+  collisionResolved: boolean;
+}
+
+/** A provider's resolved pick for one tier, before cross-provider winner selection. */
+interface ProviderPick {
+  provider: string;
+  tier: RouteTier;
+  model: CatalogModel | undefined;
+  confidence: number;
+  collisionResolved: boolean;
+}
+
+/** Inputs shared by every per-provider classification pass. */
+interface ProviderClassificationOptions {
+  excludeModels?: string[];
+  tierOverrides?: Partial<Record<RouteTier, Partial<TierFilters>>>;
+  narrow?: boolean;
+  aaMetrics: Map<string, AaModelMetrics>;
+  signal?: AbortSignal;
+  modelRegistry?: { find(provider: string, modelId: string): unknown };
+}
+
+/** Format a resolved pick as a route assignment (`model` null when unassigned). */
+function toTierAssignment(pick: {
+  tier: RouteTier;
+  model: CatalogModel | undefined;
+  confidence: number;
+  collisionResolved: boolean;
+}): TierAssignment {
+  return {
+    tier: pick.tier,
+    route: ROUTE_NAMES[pick.tier],
+    model: pick.model ? `${pick.model.provider}/${pick.model.model}` : null,
+    confidence: pick.confidence,
+    collisionResolved: pick.collisionResolved,
+  };
+}
+
 /**
- * Register the smart-router tools.
+ * Classify one provider's catalog into the four tiers.
+ *
+ * Returns the provider's route-shaped assignments plus the raw picks used for
+ * cross-provider winner selection, or `null` when the provider has no models
+ * left after exclusions. Warnings are appended to the caller-supplied list.
  */
+async function classifyProvider(
+  provider: string,
+  options: ProviderClassificationOptions,
+  warnings: string[],
+): Promise<{ assignments: TierAssignment[]; picks: ProviderPick[] } | null> {
+  const { excludeModels, tierOverrides, narrow, aaMetrics, signal, modelRegistry } = options;
+
+  let models = await fetchCatalogModels([provider], signal, modelRegistry);
+  if (excludeModels && excludeModels.length > 0) {
+    const excludeSet = new Set(excludeModels.map((id) => id.toLowerCase()));
+    models = models.filter((m) => !excludeSet.has(m.model.toLowerCase()));
+  }
+  models = deduplicateModels(models);
+
+  if (models.length === 0) {
+    warnings.push(`provider '${provider}': no models available after filters/exclusions`);
+    return null;
+  }
+
+  // Per-tier capability filter pools.
+  const tierPools = {} as Record<RouteTier, CatalogModel[]>;
+  for (const tier of TIERS) {
+    const pool = applyTierFilters(tier, models, tierOverrides?.[tier], aaMetrics);
+    tierPools[tier] = pool;
+    if (pool.length === 0) {
+      warnings.push(
+        `provider '${provider}' tier '${tier}': no candidate passes capability filters`,
+      );
+    }
+  }
+
+  const jev = await jevTierClassification(models, {
+    narrow: narrow !== false,
+    tierPools,
+    aaMetrics,
+  });
+  const allPoolModels = [...new Set(TIERS.flatMap((t) => tierPools[t]))];
+  const resolved = resolveCollisions(jev.assignments, allPoolModels, tierPools);
+  resolved.balanced = rehomeBalancedFromRunnerUpPool(
+    jev.assignments.balanced,
+    resolved,
+    tierPools,
+    aaMetrics,
+  );
+
+  const picks = TIERS.map((tier): ProviderPick => {
+    const pick = resolved[tier];
+    return {
+      provider,
+      tier,
+      model: pick.model,
+      confidence: pick.confidence,
+      collisionResolved: pick.model !== jev.assignments[tier].model,
+    };
+  });
+
+  return { assignments: picks.map(toTierAssignment), picks };
+}
+
+/**
+ * Pick the max-confidence provider per tier and build the ready-to-write
+ * route table.
+ *
+ * Sort by Jev confidence descending only — `Array.prototype.sort` is stable
+ * (ES2019), so providers declared earlier in the `providers[]` array win ties.
+ * Reorder `providers` to change the tiebreak; there's no implicit preference
+ * (no cost, alphabetical, or hash fallback).
+ *
+ * Only candidates with a real (non-null) pick compete for a route — a null
+ * pick means the tier lost its only candidate to a collision, so it can't
+ * produce one. When nobody fields a real pick, the first null pick is surfaced
+ * so the tier's `collisionResolved` signal still reaches the caller.
+ */
+function selectTierWinners(perTier: Record<RouteTier, ProviderPick[]>): {
+  routes: Record<string, { model: string; reasoning: string }>;
+  assignments: TierAssignment[];
+} {
+  const routes: Record<string, { model: string; reasoning: string }> = {};
+  const assignments = TIERS.map((tier): TierAssignment => {
+    const picks = perTier[tier];
+    const withModel = picks
+      .filter((p): p is ProviderPick & { model: CatalogModel } => p.model !== undefined)
+      .sort((x, y) => y.confidence - x.confidence);
+
+    if (withModel.length === 0) {
+      const empty = picks[0];
+      return empty
+        ? toTierAssignment(empty)
+        : toTierAssignment({
+            tier,
+            model: undefined,
+            confidence: 0,
+            collisionResolved: false,
+          });
+    }
+
+    const winner = withModel[0];
+    routes[ROUTE_NAMES[tier]] = {
+      model: `${winner.model.provider}/${winner.model.model}`,
+      reasoning: winner.model.thinking ? (tier === "powerful" ? "high" : "low") : "preserve",
+    };
+    return toTierAssignment(winner);
+  });
+
+  return { routes, assignments };
+}
+
+/**
+ * Per-provider tier classification + winner selection.
+ *
+ * Classify each provider's catalog separately and pick the highest-confidence
+ * winner per tier; ties resolve to the provider listed earlier in the caller's
+ * `providers[]` array (stable sort — no implicit alphabetical or cost-based
+ * fallback). Returns:
+ *
+ * - `routes`: ready-to-write route table keyed by route name, derived from the
+ *   per-tier winners.
+ * - `assignments`: flat winner list, one entry per tier (max confidence; same
+ *   shape as the original combined-pool response).
+ * - `perProviderResults`: the side-by-side table — one block per provider with
+ *   its per-tier picks (`undefined` when `providers.length === 1` to avoid
+ *   redundant output for the single-provider case).
+ * - `warnings`: aggregated per-provider warnings.
+ *
+ * Single-provider behavior is identical to the original combined-pool path:
+ * one Jev call, one set of per-tier pools, winner selection is trivial.
+ */
+async function setupTiersMultiProvider(
+  providers: string[],
+  excludeModels: string[] | undefined,
+  tierOverrides: Partial<Record<RouteTier, Partial<TierFilters>>> | undefined,
+  narrow: boolean | undefined,
+  aaMetrics: Map<string, AaModelMetrics>,
+  signal: AbortSignal | undefined,
+  ctx: { modelRegistry?: { find(provider: string, modelId: string): unknown } } | undefined,
+): Promise<{
+  routes: Record<string, { model: string; reasoning: string }>;
+  warnings: string[];
+  assignments: TierAssignment[];
+  perProviderResults?: Array<{ provider: string; assignments: TierAssignment[] }>;
+}> {
+  const options: ProviderClassificationOptions = {
+    excludeModels,
+    tierOverrides,
+    narrow,
+    aaMetrics,
+    signal,
+    modelRegistry: ctx?.modelRegistry,
+  };
+  const warnings: string[] = [];
+  const perProviderResults: Array<{ provider: string; assignments: TierAssignment[] }> = [];
+  const perTier: Record<RouteTier, ProviderPick[]> = {
+    cheap: [],
+    fast: [],
+    balanced: [],
+    powerful: [],
+  };
+
+  for (const provider of providers) {
+    const classified = await classifyProvider(provider, options, warnings);
+    if (!classified) continue;
+    perProviderResults.push({ provider, assignments: classified.assignments });
+    for (const pick of classified.picks) perTier[pick.tier].push(pick);
+  }
+
+  if (perProviderResults.length === 0) {
+    throw new Error(`No models found for provider(s): ${providers.join(", ")}`);
+  }
+
+  const { routes, assignments } = selectTierWinners(perTier);
+
+  return {
+    routes,
+    warnings,
+    assignments,
+    perProviderResults: providers.length > 1 ? perProviderResults : undefined,
+  };
+}
+
 export function registerTools(pi: ExtensionAPI): void {
   // Shared schema for route definitions (all four tiers have the same structure)
   const routeSchema = {
@@ -725,7 +960,7 @@ export function registerTools(pi: ExtensionAPI): void {
     name: "smart-router-setup-tiers",
     label: "Smart Router Setup Tiers",
     description:
-      "Classifies the Pi model catalog into the four smart-router tiers in one call: fetches models, applies per-tier capability filters (the fast tier also requires measured AA latency when AA data is available), asks TypeSafe Jev (one choice question per tier, single request), resolves duplicate picks deterministically inside each tier's pool, re-homes a collision-displaced balanced pick from eligible fast/powerful runner-ups, and returns a proposed assignment with ready-to-write routes. Does NOT write the config — pass the returned routes to smart-router-update-routes after user approval. Takes Jev's first response as-is; low confidence is surfaced as a warning, never re-run.",
+      "Classifies the Pi model catalog into the four smart-router tiers in one call. Single-provider path: fetch its catalog, apply per-tier capability filters (the fast tier also requires measured AA latency when AA data is available), ask TypeSafe Jev (one choice question per tier, single request), resolve duplicate picks deterministically inside each tier's pool, re-home a collision-displaced balanced pick from eligible fast/powerful runner-ups. Multi-provider path: classify each provider's catalog independently in its own Jev call, then pick the highest-confidence winner per tier (callers' `providers[]` order as tiebreak — first-listed provider wins when confidences match); all providers' results are returned in `perProviderResults` so the caller can see which provider won each tier. Either way, returns a proposed assignment with ready-to-write routes. Does NOT write the config — pass the returned routes to smart-router-update-routes after user approval. Takes Jev's first response as-is; low confidence is surfaced as a warning, never re-run.",
     promptSnippet: "Classify models into tiers with Jev and propose routes",
     parameters: {
       type: "object",
@@ -802,81 +1037,36 @@ export function registerTools(pi: ExtensionAPI): void {
         narrow?: boolean;
       };
 
-      // 1. Fetch catalog and drop excluded models.
-      let models = await fetchCatalogModels(providers, signal, ctx?.modelRegistry);
-      if (excludeModels && excludeModels.length > 0) {
-        const excludeSet = new Set(excludeModels.map((id) => id.toLowerCase()));
-        models = models.filter((m) => !excludeSet.has(m.model.toLowerCase()));
-      }
-
-      // Deduplicate cross-provider: when multiple providers offer the same
-      // model ID (e.g. hyper/deepseek-v4-pro and opencode-go/deepseek-v4-pro),
-      // keep the cheapest entry so Jev doesn't pick a marked-up version.
-      models = deduplicateModels(models);
-
+      // AA benchmark enrichment (fetched before per-provider classification so
+      // the fast tier can use measured latency). Never throws; registry-only on failure.
       const warnings: string[] = [];
-      if (models.length === 0) {
-        throw new Error(`No models found for provider(s): ${providers.join(", ")}`);
-      }
-
-      // 2. Optional AA benchmark enrichment (never throws; registry-only on failure).
-      // Fetched before per-tier filtering so tiers can use measured latency.
       const benchmarks = await getAaBenchmarks();
       if (process.env.AA_API_KEY && !benchmarks) {
         warnings.push("AA benchmark data unavailable; classification used registry data only");
       }
       const aaMetrics = buildAaMetricsMap(benchmarks);
 
-      // 3. Per-tier capability pools (the fast tier also drops latency-blind
-      // models when AA data is available; see defaultTierFilters).
-      const tierPools = {} as Record<RouteTier, CatalogModel[]>;
-      for (const tier of TIERS) {
-        const pool = applyTierFilters(tier, models, tierOverrides?.[tier], aaMetrics);
-        tierPools[tier] = pool;
-        if (pool.length === 0) {
-          warnings.push(
-            `tier '${tier}': no model passes its capability filters; relax via tierOverrides`,
-          );
-        }
-      }
-      // 4. Single Jev pass + deterministic collision resolution.
-      const jev = await jevTierClassification(models, {
-        narrow: narrow !== false,
-        tierPools,
-        aaMetrics,
-      });
-      const allPoolModels = [...new Set(TIERS.flatMap((t) => tierPools[t]))];
-      // Always pass tierPools: a tier's collision fallback must respect its own
-      // filter pool (e.g. the latency-gated fast tier) regardless of AA.
-      const resolved = resolveCollisions(jev.assignments, allPoolModels, tierPools);
-      resolved.balanced = rehomeBalancedFromRunnerUpPool(
-        jev.assignments.balanced,
-        resolved,
-        tierPools,
-        aaMetrics,
-      );
+      // Per-provider classification + winner selection. Single-provider and
+      // multi-provider paths share the same helper; perProviderResults is
+      // only attached to the response when more than one provider was passed.
+      const { routes, warnings: provWarnings, assignments, perProviderResults } =
+        await setupTiersMultiProvider(
+          providers,
+          excludeModels,
+          tierOverrides,
+          narrow,
+          aaMetrics,
+          signal,
+          ctx,
+        );
+      warnings.push(...provWarnings);
 
-      // 5. Build the proposed table and update-routes payload.
-      const ROUTE_NAMES: Record<RouteTier, string> = {
-        cheap: "cheap-code",
-        fast: "fast",
-        balanced: "balanced",
-        powerful: "powerful",
-      };
-      const assignments = TIERS.map((tier) => {
-        const pick = resolved[tier];
-        return {
-          tier,
-          route: ROUTE_NAMES[tier],
-          model: pick.model ? `${pick.model.provider}/${pick.model.model}` : null,
-          confidence: pick.confidence,
-          collisionResolved:
-            pick.model !== jev.assignments[tier].model,
-        };
-      });
+      // Surface low-confidence winners; report unfilled tiers.
       for (const a of assignments) {
-        if (a.confidence < 0.6) {
-          warnings.push(`tier '${a.tier}': low Jev confidence (${a.confidence.toFixed(2)}) — review before applying`);
+        if (a.model && a.confidence < 0.6) {
+          warnings.push(
+            `tier '${a.tier}': low Jev confidence (${a.confidence.toFixed(2)}) — review before applying`,
+          );
         }
       }
       const unassigned = assignments.filter((a) => !a.model).map((a) => a.tier);
@@ -884,19 +1074,7 @@ export function registerTools(pi: ExtensionAPI): void {
         warnings.push(`unfilled tiers: ${unassigned.join(", ")} (not included in routes)`);
       }
 
-      const routes: Record<string, { model: string; reasoning: string }> = {};
-      for (const tier of TIERS) {
-        const pick = resolved[tier];
-        if (!pick.model) continue;
-        const routeName = ROUTE_NAMES[tier];
-        const reasoning = pick.model.thinking ? (tier === "powerful" ? "high" : "low") : "preserve";
-        routes[routeName] = {
-          model: `${pick.model.provider}/${pick.model.model}`,
-          reasoning,
-        };
-      }
-
-      const result = { assignments, routes, warnings };
+      const result = { assignments, routes, warnings, perProviderResults };
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         details: result,

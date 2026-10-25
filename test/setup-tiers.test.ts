@@ -75,6 +75,32 @@ function primeJev(answers: Record<string, unknown>) {
   systemOneMock.mockResolvedValue({ answers, usage: { input_tokens: 100, output_tokens: 20 } });
 }
 
+/**
+ * Stub `pi --list-models <provider>` for two disjoint provider catalogs.
+ * `rowsByProvider[id]` is the list of catalog lines for that provider; the
+ * header row is added so the per-provider format stays consistent. When
+ * supplied, `onProvider` runs synchronously per call with the resolved
+ * provider id — useful for tests that flip a Jev answer set when the catalog
+ * switches.
+ */
+function stubDualProviderCatalog(
+  rowsByProvider: Record<string, string[]>,
+  fallbackProvider: string,
+  onProvider?: (provider: string) => void,
+): void {
+  execFileMock.mockImplementation(
+    (_cmd, args, _opts, cb) => {
+      const provider = args.find((a) => a !== "--list-models") ?? fallbackProvider;
+      onProvider?.(provider);
+      const rows = [
+        "provider  model  context  max-out  thinking  images",
+        ...(rowsByProvider[provider] ?? []),
+      ];
+      cb(null, { stdout: rows.join("\n") });
+    },
+  );
+}
+
 const NOOP_SIGNAL = new AbortController().signal;
 
 async function run(params: Record<string, unknown>) {
@@ -238,5 +264,160 @@ describe("smart-router-setup-tiers", () => {
       cb(null, { stdout: "provider  model  context  max-out  thinking  images" }),
     );
     await expect(run({ providers: ["empty-provider"] })).rejects.toThrow(/No models found/);
+  });
+
+  it("classifies each provider separately and picks the highest-confidence winner per tier", async () => {
+    // Two providers with disjoint catalogs and per-provider Jev calls.
+    // Provider A wins cheap and balanced; provider B wins fast and powerful.
+    // The flat `assignments` array should surface winners per tier; the
+    // `perProviderResults` should expose both providers' classifications.
+    let currentProvider = "provider-a";
+    stubDualProviderCatalog(
+      {
+        "provider-a": [
+          "provider-a    x      256K     64K      no        no",
+          "provider-a    y      256K     64K      no        no",
+          "provider-a    z      256K     64K      no        yes",
+          "provider-a    w      512K     384K     yes       no",
+        ],
+        "provider-b": [
+          "provider-b    x      256K     64K      no        no",
+          "provider-b    y      256K     64K      no        no",
+          "provider-b    z      256K     64K      no        yes",
+          "provider-b    w      512K     384K     yes       no",
+        ],
+      },
+      "provider-a",
+      (p) => { currentProvider = p; },
+    );
+    systemOneMock.mockImplementation(async () => ({
+      answers: {
+        cheap: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_x" : "provider_b_x",
+          0.9, {},
+        ),
+        fast: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_y" : "provider_b_y",
+          currentProvider === "provider-a" ? 0.2 : 0.8,
+          {},
+        ),
+        balanced: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_z" : "provider_b_z",
+          currentProvider === "provider-a" ? 0.85 : 0.7,
+          {},
+        ),
+        powerful: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_w" : "provider_b_w",
+          currentProvider === "provider-a" ? 0.4 : 0.95,
+          {},
+        ),
+      },
+      usage: { input_tokens: 100, output_tokens: 20 },
+    }));
+
+    const { details } = await run({ providers: ["provider-a", "provider-b"] });
+
+    // Jev was called once per provider — two calls total.
+    expect(systemOneMock).toHaveBeenCalledTimes(2);
+
+    // perProviderResults: one block per provider, four tier entries each.
+    expect(details.perProviderResults).toBeDefined();
+    expect(details.perProviderResults).toHaveLength(2);
+
+    // flat assignments reflects max-confidence winner per tier.
+    const byTier = Object.fromEntries(details.assignments.map((a: any) => [a.tier, a]));
+    expect(byTier.cheap.model).toBe("provider-a/x");
+    expect(byTier.fast.model).toBe("provider-b/y");
+    expect(byTier.balanced.model).toBe("provider-a/z");
+    expect(byTier.powerful.model).toBe("provider-b/w");
+
+    // routes payload mirrors the flat assignments.
+    expect(details.routes["cheap-code"].model).toBe("provider-a/x");
+    expect(details.routes.fast.model).toBe("provider-b/y");
+    expect(details.routes.balanced.model).toBe("provider-a/z");
+    expect(details.routes.powerful.model).toBe("provider-b/w");
+  });
+
+  it("uses providers[] insertion order as tiebreak when confidences are equal", async () => {
+    // Both providers score at the same confidence per tier. The provider
+    // listed first in `providers[]` wins — listed order is the only tiebreak.
+    let currentProvider = "alpha";
+    stubDualProviderCatalog(
+      {
+        alpha: [
+          "alpha     x      256K     64K      no        no",
+          "alpha     y      256K     64K      no        no",
+          "alpha     z      256K     64K      no        yes",
+          "alpha     w      512K     384K     yes       no",
+        ],
+        beta: [
+          "beta      x      256K     64K      no        no",
+          "beta      y      256K     64K      no        no",
+          "beta      z      256K     64K      no        yes",
+          "beta      w      512K     384K     yes       no",
+        ],
+      },
+      "alpha",
+      (p) => { currentProvider = p; },
+    );
+    systemOneMock.mockImplementation(async () => ({
+      answers: {
+        cheap: tierAnswer(currentProvider === "alpha" ? "alpha_x" : "beta_x", 0.7, {}),
+        fast: tierAnswer(currentProvider === "alpha" ? "alpha_y" : "beta_y", 0.7, {}),
+        balanced: tierAnswer(currentProvider === "alpha" ? "alpha_z" : "beta_z", 0.7, {}),
+        powerful: tierAnswer(currentProvider === "alpha" ? "alpha_w" : "beta_w", 0.7, {}),
+      },
+      usage: { input_tokens: 100, output_tokens: 20 },
+    }));
+
+    const { details } = await run({ providers: ["alpha", "beta"] });
+
+    const byTier = Object.fromEntries(details.assignments.map((a: any) => [a.tier, a]));
+    expect(byTier.cheap.model).toBe("alpha/x");
+    expect(byTier.fast.model).toBe("alpha/y");
+    expect(byTier.balanced.model).toBe("alpha/z");
+    expect(byTier.powerful.model).toBe("alpha/w");
+  });
+
+  it("flips winners when providers[] order is reversed (alpha < beta alphabetically but listed second)", async () => {
+    // Same providers and same confidences as the previous test; listing beta
+    // first flips every tier winner to beta despite alphabetical still
+    // preferring alpha. Proves listed order is the tiebreak contract.
+    let currentProvider = "alpha";
+    stubDualProviderCatalog(
+      {
+        alpha: [
+          "alpha     x      256K     64K      no        no",
+          "alpha     y      256K     64K      no        no",
+          "alpha     z      256K     64K      no        yes",
+          "alpha     w      512K     384K     yes       no",
+        ],
+        beta: [
+          "beta      x      256K     64K      no        no",
+          "beta      y      256K     64K      no        no",
+          "beta      z      256K     64K      no        yes",
+          "beta      w      512K     384K     yes       no",
+        ],
+      },
+      "alpha",
+      (p) => { currentProvider = p; },
+    );
+    systemOneMock.mockImplementation(async () => ({
+      answers: {
+        cheap: tierAnswer(currentProvider === "alpha" ? "alpha_x" : "beta_x", 0.7, {}),
+        fast: tierAnswer(currentProvider === "alpha" ? "alpha_y" : "beta_y", 0.7, {}),
+        balanced: tierAnswer(currentProvider === "alpha" ? "alpha_z" : "beta_z", 0.7, {}),
+        powerful: tierAnswer(currentProvider === "alpha" ? "alpha_w" : "beta_w", 0.7, {}),
+      },
+      usage: { input_tokens: 100, output_tokens: 20 },
+    }));
+
+    const { details } = await run({ providers: ["beta", "alpha"] });
+
+    const byTier = Object.fromEntries(details.assignments.map((a: any) => [a.tier, a]));
+    expect(byTier.cheap.model).toBe("beta/x");
+    expect(byTier.fast.model).toBe("beta/y");
+    expect(byTier.balanced.model).toBe("beta/z");
+    expect(byTier.powerful.model).toBe("beta/w");
   });
 });
