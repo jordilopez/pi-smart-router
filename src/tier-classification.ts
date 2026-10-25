@@ -9,7 +9,7 @@
 
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import { type RouteTier } from "./types.js";
-import { prepareClassifierRequest, slugify, type CatalogModel } from "./tools.js";
+import { prepareClassifierRequest, slugify, type CatalogModel } from "./catalog.js";
 import { normalizeModelId, type AaModelMetrics } from "./aa-client.js";
 
 // ============================================================================

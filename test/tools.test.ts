@@ -16,11 +16,11 @@ import {
   parseTokenValue,
   positioningClause,
   prepareClassifierRequest,
-  rehomeBalancedFromRunnerUpPool,
   slugify,
   validateRouteModels,
   type CatalogModel,
-} from "../src/tools.js";
+} from "../src/catalog.js";
+import { rehomeBalancedFromRunnerUpPool } from "../src/tools.js";
 import { buildAaMetricsMap, type AaBenchmarks } from "../src/aa-client.js";
 
 describe("parseTokenValue", () => {
