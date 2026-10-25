@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { modelDescription } from '../src/tools.js';
+import { modelDescription } from '../src/catalog.js';
 import { augmentModelDescription, getTierWeighting, computeTaskCost } from '../src/aa-enrichment.js';
 
 describe('aa-enrichment', () => {
