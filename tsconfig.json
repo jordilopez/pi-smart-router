@@ -18,17 +18,24 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "baseUrl": ".",
+    // Host-provided packages (@earendil-works/pi-ai, pi-tui) are supplied by Pi at
+    // runtime and are only installed locally as transitive deps of pi-coding-agent.
+    // Each entry is a fallback chain (top-level first, then nested) so tsc keeps
+    // resolving types whether the host dep tree is hoisted or nested.
     "paths": {
       "@earendil-works/pi-ai": [
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/compat.d.ts"
+        "node_modules/@earendil-works/pi-ai/dist/index.d.ts",
+        "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.d.ts"
       ],
       "@earendil-works/pi-ai/compat": [
+        "node_modules/@earendil-works/pi-ai/dist/compat.d.ts",
         "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/compat.d.ts"
       ],
       "@earendil-works/pi-coding-agent": [
         "node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
       ],
       "@earendil-works/pi-tui": [
+        "node_modules/@earendil-works/pi-tui/dist/index.d.ts",
         "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.d.ts"
       ]
     }
