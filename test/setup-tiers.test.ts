@@ -239,4 +239,121 @@ describe("smart-router-setup-tiers", () => {
     );
     await expect(run({ providers: ["empty-provider"] })).rejects.toThrow(/No models found/);
   });
+
+  it("classifies each provider separately and picks the highest-confidence winner per tier", async () => {
+    // Two providers with disjoint catalogs and per-provider Jev calls.
+    // Provider A wins cheap and balanced; provider B wins fast and powerful.
+    // The flat `assignments` array should surface winners per tier; the
+    // `perProviderResults` should expose both providers' classifications.
+    systemOneMock.mockImplementation(async () => ({
+      answers: {
+        cheap: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_x" : "provider_b_x",
+          0.9, {},
+        ),
+        fast: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_y" : "provider_b_y",
+          currentProvider === "provider-a" ? 0.2 : 0.8,
+          {},
+        ),
+        balanced: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_z" : "provider_b_z",
+          currentProvider === "provider-a" ? 0.85 : 0.7,
+          {},
+        ),
+        powerful: tierAnswer(
+          currentProvider === "provider-a" ? "provider_a_w" : "provider_b_w",
+          currentProvider === "provider-a" ? 0.4 : 0.95,
+          {},
+        ),
+      },
+      usage: { input_tokens: 100, output_tokens: 20 },
+    }));
+
+    let currentProvider = "provider-a";
+    execFileMock.mockImplementation((_c: string, args: string[], _o: unknown, cb: (e: unknown, out: { stdout: string }) => void) => {
+      const providerArg = args.find((a) => a !== "--list-models") ?? "provider-a";
+      currentProvider = providerArg;
+      const header = "provider      model  context  max-out  thinking  images";
+      const rows: string[] = [header];
+      if (providerArg === "provider-a") {
+        rows.push("provider-a    x      256K     64K      no        no");
+        rows.push("provider-a    y      256K     64K      no        no");
+        rows.push("provider-a    z      256K     64K      no        yes");
+        rows.push("provider-a    w      512K     384K     yes       no");
+      } else {
+        rows.push("provider-b    x      256K     64K      no        no");
+        rows.push("provider-b    y      256K     64K      no        no");
+        rows.push("provider-b    z      256K     64K      no        yes");
+        rows.push("provider-b    w      512K     384K     yes       no");
+      }
+      cb(null, { stdout: rows.join("\n") });
+    });
+
+    const { details } = await run({ providers: ["provider-a", "provider-b"] })
+      .finally(() => { currentProvider = "provider-a"; });
+
+    // Jev was called once per provider — two calls total.
+    expect(systemOneMock).toHaveBeenCalledTimes(2);
+
+    // perProviderResults: one block per provider, four tier entries each.
+    expect(details.perProviderResults).toBeDefined();
+    expect(details.perProviderResults).toHaveLength(2);
+
+    // flat assignments reflects max-confidence winner per tier.
+    const byTier = Object.fromEntries(details.assignments.map((a: any) => [a.tier, a]));
+    expect(byTier.cheap.model).toBe("provider-a/x");
+    expect(byTier.fast.model).toBe("provider-b/y");
+    expect(byTier.balanced.model).toBe("provider-a/z");
+    expect(byTier.powerful.model).toBe("provider-b/w");
+
+    // routes payload mirrors the flat assignments.
+    expect(details.routes["cheap-code"].model).toBe("provider-a/x");
+    expect(details.routes.fast.model).toBe("provider-b/y");
+    expect(details.routes.balanced.model).toBe("provider-a/z");
+    expect(details.routes.powerful.model).toBe("provider-b/w");
+  });
+
+  it("uses alphabetical provider id as tiebreak when confidences are equal", async () => {
+    // Both providers score at the same confidence per tier. The "earlier"
+    // provider by alphabetical order (alpha < beta) must win ties.
+    let currentProvider = "alpha";
+    systemOneMock.mockImplementation(async () => ({
+      answers: {
+        cheap: tierAnswer(currentProvider === "alpha" ? "alpha_x" : "beta_x", 0.7, {}),
+        fast: tierAnswer(currentProvider === "alpha" ? "alpha_y" : "beta_y", 0.7, {}),
+        balanced: tierAnswer(currentProvider === "alpha" ? "alpha_z" : "beta_z", 0.7, {}),
+        powerful: tierAnswer(currentProvider === "alpha" ? "alpha_w" : "beta_w", 0.7, {}),
+      },
+      usage: { input_tokens: 100, output_tokens: 20 },
+    }));
+
+    execFileMock.mockImplementation((_c: string, args: string[], _o: unknown, cb: (e: unknown, out: { stdout: string }) => void) => {
+      const providerArg = args.find((a) => a !== "--list-models") ?? "alpha";
+      currentProvider = providerArg;
+      const header = "provider  model  context  max-out  thinking  images";
+      const rows: string[] = [header];
+      if (providerArg === "alpha") {
+        rows.push("alpha     x      256K     64K      no        no");
+        rows.push("alpha     y      256K     64K      no        no");
+        rows.push("alpha     z      256K     64K      no        yes");
+        rows.push("alpha     w      512K     384K     yes       no");
+      } else {
+        rows.push("beta      x      256K     64K      no        no");
+        rows.push("beta      y      256K     64K      no        no");
+        rows.push("beta      z      256K     64K      no        yes");
+        rows.push("beta      w      512K     384K     yes       no");
+      }
+      cb(null, { stdout: rows.join("\n") });
+    });
+
+    const { details } = await run({ providers: ["alpha", "beta"] })
+      .finally(() => { currentProvider = "alpha"; });
+
+    const byTier = Object.fromEntries(details.assignments.map((a: any) => [a.tier, a]));
+    expect(byTier.cheap.model).toBe("alpha/x");
+    expect(byTier.fast.model).toBe("alpha/y");
+    expect(byTier.balanced.model).toBe("alpha/z");
+    expect(byTier.powerful.model).toBe("alpha/w");
+  });
 });

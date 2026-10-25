@@ -332,6 +332,17 @@ What the classifier does with the data:
 Data from these benchmarks is used under the terms of the Artificial Analysis
 data license.
 
+### Multi-provider classification
+
+When `smart-router-setup-tiers` receives more than one provider, each provider's
+catalog is classified independently (its own Jev call) and the highest-confidence
+pick per tier wins, with alphabetical provider id as the deterministic tiebreak.
+The response includes `perProviderResults` — every provider's per-tier table — so
+you can see which provider won each tier and what the losers proposed. Single-provider
+requests behave exactly as before (one Jev call, no `perProviderResults`). Cost:
+one Jev call per provider instead of one combined call, and Jev never compares
+candidates across providers directly.
+
 ## Route visibility in Pi's UI
 
 - **Footer** - pi's native virtual-model footer shows the routed backend next to the selection, e.g. `auto • high → <provider>/<model> • medium`, and `/session` lists cost per physical model. Additionally, a compact footer status shows the routing tier: `⚡ fast`, `🪙 cheap-code · rule:typos`, `💎 powerful · classifier`, or `⚡ fast · retry-fallback` when a retry switched backends. It briefly shows `… classifying` while the classifier runs, and is cleared on session shutdown.

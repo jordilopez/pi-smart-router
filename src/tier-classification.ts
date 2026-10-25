@@ -240,8 +240,10 @@ export async function jevTierClassification(
 // Deterministic collision resolution
 // ============================================================================
 
-/** Tier capability rank for tie-breaking (higher = more capable). */
-const TIER_RANK: Record<RouteTier, number> = { cheap: 0, fast: 1, balanced: 2, powerful: 3 };
+/** Tier capability rank for tie-breaking (higher = more capable). Exported so the
+ *  per-provider winner-selection helper can prefer the more capable tier when
+ *  two providers tie on confidence and provider id. */
+export const TIER_RANK: Record<RouteTier, number> = { cheap: 0, fast: 1, balanced: 2, powerful: 3 };
 
 /**
  * Resolve duplicate picks across tiers deterministically:
