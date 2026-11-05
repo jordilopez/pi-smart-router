@@ -26,11 +26,17 @@ Source of truth is `TIER_RUBRIC` in `src/types.ts`. Capability filters are appli
 | balanced | `balanced` | context-aware judgment, review, tradeoffs | ≥200k context, images |
 | powerful | `powerful` | architecture, security, root-cause, cross-cutting | ≥500k context, thinking |
 
+Expected cost ladder (per 1M in / 250k out at 4:1): cheap ≤ fast ≤ balanced ≤ powerful. Tiers that violate it need justification at the approval gate.
+
+`smart-router-setup-tiers` returns no pricing fields — fetch `costIn`/`costOut` via `smart-router-catalog` when the approval gate needs them.
+
 ## Workflow
 
 1. **Gather providers.** Ask which provider(s) to configure (e.g. `hyper`, `opencode-go`). Multiple providers pool into one candidate list per tier.
 2. **Classify.** Call `smart-router-setup-tiers({ providers, excludeModels?, tierOverrides?, narrow? })`. One Jev pass, answer taken as-is. It returns `assignments`, `routes` (ready-to-write), and `warnings`. If Jev is unavailable, the tool throws — surface the error and offer the manual fallback.
 3. **Show and get approval.** Render `assignments` as a table (Tier | Route | Model | Confidence) and pass `warnings` through verbatim. Then ask the user to approve. This is the gate — never call `update-routes` without a yes.
+   - **Check cost ordering.** Cost is a first-class decision input. Jev weighs capability first and cost only as a tie-break (see `costClause` in `src/catalog.ts`), so it can still propose a model that breaks the tier cost ladder. Fetch pricing via `smart-router-catalog`, compute each pick's blended cost (`costIn + costOut / 4`, a 4:1 input:output mix), and include it in the table.
+   - **Flag inversions.** Flag any tier more expensive than a higher tier (e.g. `balanced` costing more than `powerful`) or costing ≥3× the blended cost of the cheapest filter-compliant alternative. Treat missing pricing as unknown, not zero: flag it rather than ranking it. Offer the cheaper compliant alternatives, then ask for approval. This cost offer is the one sanctioned proactive proposal — all other model swaps remain user-driven.
    - **Approve** → step 4.
    - **Wants changes** → the user names them (a specific tier/model, or a re-run with different `excludeModels`/`tierOverrides`). Apply/forward it and, if routes changed, re-show before writing. This is user-driven, not a standing refinement loop you propose unprompted.
    - Flag any unfilled tier and which `tierOverrides` knob would open it.
