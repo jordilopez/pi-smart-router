@@ -14,7 +14,6 @@ import { promisify } from "node:util";
 import { TIER_RUBRIC, type RouteTier } from "./types.js";
 import { augmentModelDescription, getTierWeighting, computeTaskCost } from "./aa-enrichment.js";
 import { normalizeModelId, type AaModelMetrics } from "./aa-client.js";
-import { filterModelsForCurrentAuth, type ProviderAuthInfo } from "./provider-compat.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,7 +25,7 @@ const execFileAsync = promisify(execFile);
 export async function fetchCatalogModels(
   providers: string[],
   signal: AbortSignal | undefined,
-  registry?: { find: (p: string, m: string) => any } & ProviderAuthInfo,
+  registry?: { find: (p: string, m: string) => any },
 ): Promise<CatalogModel[]> {
   const results = await Promise.all(providers.map((provider) =>
     execFileAsync(
@@ -35,14 +34,7 @@ export async function fetchCatalogModels(
       { encoding: "utf-8", timeout: 15000, signal },
     ).then(({ stdout }) => parseModelsTable(stdout)),
   ));
-  // `pi --list-models <search>` is fuzzy, so it can return models from
-  // similarly named providers (for example `opencode` for `openai`). Keep
-  // only rows belonging to the providers explicitly requested.
-  const requestedProviders = new Set(providers.map((provider) => provider.toLowerCase()));
-  const allModels = filterModelsForCurrentAuth(
-    results.flat().filter((model) => requestedProviders.has(model.provider.toLowerCase())),
-    registry,
-  );
+  const allModels = results.flat();
   if (registry?.find) {
     for (const m of allModels) {
       const found = registry.find(m.provider, m.model);

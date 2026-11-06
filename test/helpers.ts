@@ -38,8 +38,6 @@ export interface FakeRegistryOptions {
   onFind?: (provider: string, modelId: string) => void;
   /** Provider headers returned by getProvider */
   providerHeaders?: Record<string, string | null>;
-  /** Providers backed by OAuth credentials */
-  oauthProviders?: string[];
 }
 
 export class FakeRegistry implements RouterModelRegistry {
@@ -49,7 +47,6 @@ export class FakeRegistry implements RouterModelRegistry {
   auth: ResolvedRequestAuth;
   readonly onFind?: (provider: string, modelId: string) => void;
   providerHeaders?: Record<string, string | null>;
-  readonly oauthProviders: Set<string>;
   /** Stable provider instance returned by getProvider (default: fresh per call). */
   stableProvider?: Provider;
   findCalls = 0;
@@ -61,7 +58,6 @@ export class FakeRegistry implements RouterModelRegistry {
     this.auth = options.auth ?? { ok: true, apiKey: "test-key", headers: { "x-test": "1" } };
     this.onFind = options.onFind;
     this.providerHeaders = options.providerHeaders;
-    this.oauthProviders = new Set(options.oauthProviders ?? []);
     this.stableProvider = options.stableProvider;
   }
 
@@ -78,10 +74,6 @@ export class FakeRegistry implements RouterModelRegistry {
 
   hasConfiguredAuth(model: Model<Api>): boolean {
     return !this.unauthenticated.has(model.provider);
-  }
-
-  isUsingOAuth(model: Model<Api>): boolean {
-    return this.oauthProviders.has(model.provider);
   }
 
   async getApiKeyAndHeaders(_model: Model<Api>): Promise<ResolvedRequestAuth> {
