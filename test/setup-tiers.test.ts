@@ -103,12 +103,16 @@ function stubDualProviderCatalog(
 
 const NOOP_SIGNAL = new AbortController().signal;
 
-async function run(params: Record<string, unknown>) {
+async function run(
+  params: Record<string, unknown>,
+  options: { oauthProviders?: string[] } = {},
+) {
   const tool = getTool();
   return tool.execute("t1", params, NOOP_SIGNAL, vi.fn(), {
     modelRegistry: {
       find: (p: string, m: string): any =>
         ({ "hyper/a-flash": { cost: { input: 0.1, output: 0.4 } } } as Record<string, unknown>)[`${p}/${m}`],
+      isUsingOAuth: (model: { provider: string }) => options.oauthProviders?.includes(model.provider) ?? false,
     },
     cwd: "/tmp",
   });
@@ -120,6 +124,33 @@ beforeEach(() => {
 });
 
 describe("smart-router-setup-tiers", () => {
+  it("keeps malformed update-routes input on the validation error path", async () => {
+    const pi = fakePi();
+    registerTools(pi);
+    const tool = pi.tools.find((candidate: any) => candidate.name === "smart-router-update-routes");
+
+    await expect(tool.execute("t1", { routes: { "cheap-code": {} } }, NOOP_SIGNAL, vi.fn(), {
+      modelRegistry: { find: () => undefined },
+      cwd: "/tmp",
+    })).rejects.toThrow(/Route 'cheap-code' is missing a model/);
+  });
+
+  it("refuses to write an OpenAI mini model for a ChatGPT OAuth provider", async () => {
+    const pi = fakePi();
+    registerTools(pi);
+    const tool = pi.tools.find((candidate: any) => candidate.name === "smart-router-update-routes");
+
+    await expect(tool.execute("t1", {
+      routes: { "cheap-code": { model: "openai/gpt-5-mini" } },
+    }, NOOP_SIGNAL, vi.fn(), {
+      modelRegistry: {
+        find: () => ({ provider: "openai", id: "gpt-5-mini" }),
+        isUsingOAuth: () => true,
+      },
+      cwd: "/tmp",
+    })).rejects.toThrow(/not supported with the current openai OAuth account/);
+  });
+
   it("returns assignments, routes, and warnings in one pass", async () => {
     primeJev(defaultAnswers());
     const { details } = await run({ providers: ["hyper"] });
@@ -180,6 +211,29 @@ describe("smart-router-setup-tiers", () => {
     // (a Choice question requires at least one criterion).
     expect(req.questions.powerful).toBeUndefined();
     expect(req.questions.cheap).toBeDefined();
+  });
+
+  it("does not classify OpenAI mini models for a ChatGPT OAuth provider", async () => {
+    execFileMock.mockImplementationOnce((_c, _a, _o, cb) =>
+      cb(null, { stdout: [
+        "provider  model      context  max-out  thinking  images",
+        "openai    gpt-5-mini 400K     128K     yes       yes",
+        "openai    gpt-5.5    272K     128K     yes       yes",
+      ].join("\n") }),
+    );
+    primeJev({
+      cheap: tierAnswer("openai_gpt_55", 0.9, { openai_gpt_55: 0.9 }),
+      fast: tierAnswer("openai_gpt_55", 0.9, { openai_gpt_55: 0.9 }),
+      balanced: tierAnswer("openai_gpt_55", 0.9, { openai_gpt_55: 0.9 }),
+      powerful: tierAnswer("openai_gpt_55", 0.9, { openai_gpt_55: 0.9 }),
+    });
+
+    await run({ providers: ["openai"] }, { oauthProviders: ["openai"] });
+
+    const req = systemOneMock.mock.calls[0][0];
+    for (const question of Object.values(req.questions) as any[]) {
+      expect(Object.keys(question.criteria)).not.toContain("openai_gpt_5_mini");
+    }
   });
 
   it("warns about empty pools and unfilled tiers", async () => {

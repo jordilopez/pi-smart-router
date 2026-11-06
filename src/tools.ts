@@ -25,6 +25,7 @@ import { jevTierClassification, resolveCollisions, applyTierFilters, type JevTie
 import { getAaBenchmarks, buildAaMetricsMap, normalizeModelId, type AaModelMetrics } from "./aa-client.js";
 import { computeTaskCost } from "./aa-enrichment.js";
 import { fetchCatalogModels, deduplicateModels, prepareClassifierRequest, slugify, hasCost, validateRouteModels, type CatalogModel } from "./catalog.js";
+import { isModelCompatibleWithCurrentAuth } from "./provider-compat.js";
 
 /** "provider/model" slug for an assignment's pick, or null when unassigned. */
 function assignmentSlug(assignment: JevTierAssignment): string | null {
@@ -510,6 +511,18 @@ export function registerTools(pi: ExtensionAPI): void {
       const modelErrors = validateRouteModels(routes, (provider, modelId) =>
         ctx.modelRegistry.find(provider, modelId),
       );
+      for (const [routeName, route] of Object.entries(routes)) {
+        if (!route || typeof route.model !== "string") continue;
+        const slashIndex = route.model.indexOf("/");
+        if (slashIndex <= 0 || slashIndex === route.model.length - 1) continue;
+        const provider = route.model.slice(0, slashIndex);
+        const modelId = route.model.slice(slashIndex + 1);
+        if (!isModelCompatibleWithCurrentAuth(provider, modelId, ctx.modelRegistry)) {
+          modelErrors.push(
+            `Route '${routeName}' model '${route.model}' is not supported with the current ${provider} OAuth account`,
+          );
+        }
+      }
       if (modelErrors.length > 0) {
         throw new Error(`Refusing to write config: ${modelErrors.join("; ")}`);
       }

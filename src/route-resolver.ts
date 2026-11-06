@@ -20,6 +20,7 @@ import type { Api, Context, Model } from "@earendil-works/pi-ai";
 import { getLatestUserPrompt, matchRule } from "./classifier.js";
 import { RouterError } from "./types.js";
 import type { PromptFeatures, RouteConfig, RouteDecision, RouterModelRegistry, RouteTier, SmartRouterConfig } from "./types.js";
+import { isModelCompatibleWithCurrentAuth } from "./provider-compat.js";
 
 // ============================================================================
 // Capability checks
@@ -98,6 +99,7 @@ export function isRouteAvailable(
   const model = registry.find(providerId, modelId);
   if (!model) return false;
 
+  if (!isModelCompatibleWithCurrentAuth(providerId, modelId, registry)) return false;
   if (!registry.getProvider(providerId)) return false;
   if (!registry.hasConfiguredAuth(model)) return false;
 

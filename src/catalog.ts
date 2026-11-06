@@ -14,6 +14,7 @@ import { promisify } from "node:util";
 import { TIER_RUBRIC, type RouteTier } from "./types.js";
 import { augmentModelDescription, getTierWeighting, computeTaskCost } from "./aa-enrichment.js";
 import { normalizeModelId, type AaModelMetrics } from "./aa-client.js";
+import { filterModelsForCurrentAuth, type ProviderAuthInfo } from "./provider-compat.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +26,7 @@ const execFileAsync = promisify(execFile);
 export async function fetchCatalogModels(
   providers: string[],
   signal: AbortSignal | undefined,
-  registry?: { find: (p: string, m: string) => any },
+  registry?: { find: (p: string, m: string) => any } & ProviderAuthInfo,
 ): Promise<CatalogModel[]> {
   const results = await Promise.all(providers.map((provider) =>
     execFileAsync(
@@ -34,7 +35,7 @@ export async function fetchCatalogModels(
       { encoding: "utf-8", timeout: 15000, signal },
     ).then(({ stdout }) => parseModelsTable(stdout)),
   ));
-  const allModels = results.flat();
+  const allModels = filterModelsForCurrentAuth(results.flat(), registry);
   if (registry?.find) {
     for (const m of allModels) {
       const found = registry.find(m.provider, m.model);

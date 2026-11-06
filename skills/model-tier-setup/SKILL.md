@@ -33,7 +33,7 @@ Expected cost ladder (per 1M in / 250k out at 4:1): cheap ≤ fast ≤ balanced 
 ## Workflow
 
 1. **Gather providers.** Ask which provider(s) to configure (e.g. `hyper`, `opencode-go`). Multiple providers pool into one candidate list per tier.
-2. **Classify.** Call `smart-router-setup-tiers({ providers, excludeModels?, tierOverrides?, narrow? })`. One Jev pass, answer taken as-is. It returns `assignments`, `routes` (ready-to-write), and `warnings`. If Jev is unavailable, the tool throws — surface the error and offer the manual fallback.
+2. **Classify.** Call `smart-router-setup-tiers({ providers, excludeModels?, tierOverrides?, narrow? })`. One Jev pass, answer taken as-is. It returns `assignments`, `routes` (ready-to-write), and `warnings`. The tool also applies the active provider credential's compatibility guard before classification; for OpenAI ChatGPT OAuth it excludes API-only `mini`/`nano` variants such as `gpt-5-mini`. If Jev is unavailable, the tool throws — surface the error and offer the manual fallback.
 3. **Show and get approval.** Render `assignments` as a table (Tier | Route | Model | Confidence) and pass `warnings` through verbatim. Then ask the user to approve. This is the gate — never call `update-routes` without a yes.
    - **Check cost ordering.** Cost is a first-class decision input. Jev weighs capability first and cost only as a tie-break (see `costClause` in `src/catalog.ts`), so it can still propose a model that breaks the tier cost ladder. Fetch pricing via `smart-router-catalog`, compute each pick's blended cost (`costIn + costOut / 4`, a 4:1 input:output mix), and include it in the table.
    - **Flag inversions.** Flag any tier more expensive than a higher tier (e.g. `balanced` costing more than `powerful`) or costing ≥3× the blended cost of the cheapest filter-compliant alternative. Treat missing pricing as unknown, not zero: flag it rather than ranking it. Offer the cheaper compliant alternatives, then ask for approval. This cost offer is the one sanctioned proactive proposal — all other model swaps remain user-driven.
@@ -46,6 +46,7 @@ Expected cost ladder (per 1M in / 250k out at 4:1): cheap ≤ fast ≤ balanced 
 ## Hard Rules
 
 - Never write the config without showing the proposal and getting approval first.
-- Never invent model IDs — copy exactly (lowercase) from tool output; `update-routes` enforces via registry validation.
+- Never invent model IDs — copy exactly (lowercase) from tool output; `update-routes` enforces registry and current-auth compatibility validation.
+- Do not manually re-add a model excluded by the current-auth guard. If filtering leaves a tier empty, use a supported provider/model or an API-key login rather than bypassing the guard.
 - Never re-run Jev because confidence was low — surface the warning and let the user decide. The only re-run is a fresh classification with changed filters/exclusions the user asked for.
 - The tool resolves model collisions deterministically and never displaces `powerful` — leave two tiers on one model is not an option.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkModelCapabilities, classifierThresholds, resolveRoute, tierForScore } from "../src/route-resolver.js";
+import { checkModelCapabilities, classifierThresholds, isRouteAvailable, resolveRoute, tierForScore } from "../src/route-resolver.js";
 import { RouterError } from "../src/types.js";
 import type { PromptFeatures, RouteConfig, SmartRouterConfig } from "../src/types.js";
 import { FakeRegistry, makeContext, makeModel } from "./helpers.js";
@@ -70,6 +70,15 @@ describe("checkModelCapabilities", () => {
     const model = makeModel({ provider: "p", id: "m", maxTokens: 8192 });
     expect(checkModelCapabilities(model, features(), { model: "p/m", maxTokens: 9999 }).compatible).toBe(false);
     expect(checkModelCapabilities(model, features(), { model: "p/m", maxTokens: 8192 }).compatible).toBe(true);
+  });
+});
+
+describe("current-auth route compatibility", () => {
+  it("treats an OpenAI mini model as unavailable for ChatGPT OAuth", () => {
+    const model = makeModel({ provider: "openai", id: "gpt-5-mini" });
+    const registry = new FakeRegistry({ models: [model], oauthProviders: ["openai"] });
+
+    expect(isRouteAvailable(registry, "fast", { model: "openai/gpt-5-mini" }, features())).toBe(false);
   });
 });
 
