@@ -259,6 +259,8 @@ export interface RouterModelRegistry {
   hasConfiguredAuth(model: Model<Api>): boolean;
   getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth>;
   getAvailable(): Model<Api>[];
+  /** Optional host capability used to exclude auth-incompatible catalog models. */
+  isUsingOAuth?(model: Model<Api>): boolean;
 }
 
 // ============================================================================
