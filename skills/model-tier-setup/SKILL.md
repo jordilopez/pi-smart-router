@@ -39,7 +39,7 @@ Expected cost ladder (per 1M in / 250k out at 4:1): cheap ≤ fast ≤ balanced 
    - **Flag inversions.** Flag any tier more expensive than a higher tier (e.g. `balanced` costing more than `powerful`) or costing ≥3× the blended cost of the cheapest filter-compliant alternative. Treat missing pricing as unknown, not zero: flag it rather than ranking it. Offer the cheaper compliant alternatives, then ask for approval. This cost offer is the one sanctioned proactive proposal — all other model swaps remain user-driven.
    - **Approve** → step 4.
    - **Wants changes** → the user names them (a specific tier/model, or a re-run with different `excludeModels`/`tierOverrides`). Apply/forward it and, if routes changed, re-show before writing. This is user-driven, not a standing refinement loop you propose unprompted.
-   - Flag any unfilled tier and which `tierOverrides` knob would open it.
+   - Flag any unfilled tier and which `tierOverrides` knob would open it. Prefer four distinct models when four eligible candidates exist; the collision resolver re-homes duplicate picks rather than silently assigning one model to multiple tiers. If filtering leaves fewer than four eligible models, report the scarcity and leave the affected tier unfilled rather than inventing or silently duplicating a route.
 4. **Write.** Call `smart-router-update-routes({ routes })` with the approved routes object. It validates models against the registry, preserves all non-`routes` config, and warns if a project config shadows the global one — surface that warning.
 5. **Report.** Summarize which tiers changed and remind the user to restart Pi (or reload the extension) to take effect.
 
@@ -49,4 +49,4 @@ Expected cost ladder (per 1M in / 250k out at 4:1): cheap ≤ fast ≤ balanced 
 - Never invent model IDs — copy exactly (lowercase) from tool output; `update-routes` enforces registry and current-auth compatibility validation.
 - Do not manually re-add a model excluded by the current-auth guard. If filtering leaves a tier empty, use a supported provider/model or an API-key login rather than bypassing the guard.
 - Never re-run Jev because confidence was low — surface the warning and let the user decide. The only re-run is a fresh classification with changed filters/exclusions the user asked for.
-- The tool resolves model collisions deterministically and never displaces `powerful` — leave two tiers on one model is not an option.
+- The tool resolves model collisions deterministically and never displaces `powerful`; keep tier assignments distinct whenever the filtered candidate pool permits it. Do not silently assign one model to multiple tiers or invent a replacement when a tier is unfilled.
