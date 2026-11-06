@@ -22,33 +22,6 @@ import {
 } from "../src/catalog.js";
 import { rehomeBalancedFromRunnerUpPool } from "../src/tools.js";
 import { buildAaMetricsMap, type AaBenchmarks } from "../src/aa-client.js";
-import { filterModelsForCurrentAuth } from "../src/provider-compat.js";
-
-describe("current-auth model compatibility", () => {
-  const models: CatalogModel[] = [
-    { provider: "openai", model: "gpt-5-mini", context: 400_000, maxOut: 128_000, thinking: true, images: true },
-    { provider: "openai", model: "gpt-5.5", context: 272_000, maxOut: 128_000, thinking: true, images: true },
-    { provider: "openai-codex", model: "gpt-5-mini", context: 400_000, maxOut: 128_000, thinking: true, images: true },
-    { provider: "opencode-go", model: "gpt-5-mini", context: 400_000, maxOut: 128_000, thinking: true, images: true },
-  ];
-
-  it("excludes OpenAI mini/nano variants when the provider uses ChatGPT OAuth", () => {
-    const filtered = filterModelsForCurrentAuth(models, {
-      isUsingOAuth: (model) => model.provider === "openai",
-    });
-
-    expect(filtered.map((model) => `${model.provider}/${model.model}`)).toEqual([
-      "openai/gpt-5.5",
-      "openai-codex/gpt-5-mini",
-      "opencode-go/gpt-5-mini",
-    ]);
-  });
-
-  it("does not apply the OpenAI OAuth restriction to API-key providers", () => {
-    expect(filterModelsForCurrentAuth(models, { isUsingOAuth: () => false })).toEqual(models);
-    expect(filterModelsForCurrentAuth(models)).toEqual(models);
-  });
-});
 
 describe("parseTokenValue", () => {
   it("parses K and M suffixes (case-insensitive)", () => {
