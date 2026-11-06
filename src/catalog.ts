@@ -35,14 +35,7 @@ export async function fetchCatalogModels(
       { encoding: "utf-8", timeout: 15000, signal },
     ).then(({ stdout }) => parseModelsTable(stdout)),
   ));
-  // `pi --list-models <search>` is fuzzy, so it can return models from
-  // similarly named providers (for example `opencode` for `openai`). Keep
-  // only rows belonging to the providers explicitly requested.
-  const requestedProviders = new Set(providers.map((provider) => provider.toLowerCase()));
-  const allModels = filterModelsForCurrentAuth(
-    results.flat().filter((model) => requestedProviders.has(model.provider.toLowerCase())),
-    registry,
-  );
+  const allModels = filterModelsForCurrentAuth(results.flat(), registry);
   if (registry?.find) {
     for (const m of allModels) {
       const found = registry.find(m.provider, m.model);

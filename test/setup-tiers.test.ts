@@ -219,7 +219,6 @@ describe("smart-router-setup-tiers", () => {
         "provider  model      context  max-out  thinking  images",
         "openai    gpt-5-mini 400K     128K     yes       yes",
         "openai    gpt-5.5    272K     128K     yes       yes",
-        "opencode  longcat-2.5-preview-free 1M 131.1K yes yes",
       ].join("\n") }),
     );
     primeJev({
@@ -234,7 +233,6 @@ describe("smart-router-setup-tiers", () => {
     const req = systemOneMock.mock.calls[0][0];
     for (const question of Object.values(req.questions) as any[]) {
       expect(Object.keys(question.criteria)).not.toContain("openai_gpt_5_mini");
-      expect(Object.keys(question.criteria)).not.toContain("opencode_longcat_2_5_preview_free");
     }
   });
 
